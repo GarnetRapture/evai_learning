@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "GarnetRapture_evai"
+version = "0.1.0"
+description = "EVAI persona fine-tuning pipeline: full-parameter training of LiquidAI/LFM2.5-230M-Base into a character-identity spirit model"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { email = "master@n9k32.com" }
+]
+dependencies = [
+    "torch",
+    "transformers>=5.2.0",
+    "datasets",
+    "accelerate",
+    "trl",
+    "safetensors",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+garnet-evai = "GarnetRapture_evai:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["src"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = []
+
+[tool.pyright]
+include = ["src", "tests"]
+exclude = ["**/__pycache__", "models", "artifacts", "tmp-codex"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
