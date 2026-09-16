@@ -1,6 +1,7 @@
 .agents/
 .claude/
 .github/skills/
+.vscode/
 AGENTS.md
 CLAUDE.md
 HANDOFF.md

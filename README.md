@@ -1,4 +1,4 @@
-# GarnetRapture_evai: EVAI Persona Fine-Tuning Pipeline
+# evai_learning: EVAI Persona Fine-Tuning Pipeline
 
 EVAI 공개 페르소나 데이터(`data/*.json`)와 로컬 `LiquidAI/LFM2.5-230M-Base` 베이스 모델(`models/lfm2-230m`)을 활용한 **로컬 페르소나 전체 파라미터(full-parameter) 파인튜닝 파이프라인**입니다.
 
@@ -30,7 +30,7 @@ data/*.json
 ## 2. 프로젝트 디렉터리 구조
 
 ```text
-fff/                             (프로젝트 루트, 패키지명은 GarnetRapture_evai)
+evai_learning/                   (프로젝트 루트)
 ├─ data/
 │  └─ *.json                   # EVAI 원본 페르소나 JSON (99개, 절대 수정/이동 금지)
 │
@@ -41,26 +41,18 @@ fff/                             (프로젝트 루트, 패키지명은 GarnetRap
 │  ├─ model.yaml               # 베이스 모델 로컬 경로 및 오프라인 로드 설정
 │  └─ training.yaml            # 전체 파라미터 파인튜닝 하이퍼파라미터 (bf16, AdamW, cosine)
 │
-├─ src/
-│  └─ GarnetRapture_evai/
-│     ├─ __init__.py           # 패키지 메타데이터 (__version__ = "0.1.0")
-│     ├─ __main__.py           # python -m GarnetRapture_evai 진입점
-│     ├─ cli.py                # CLI 명령어 구현 (env/data/model/check/build-dataset/train/evaluate/export/serve)
-│     ├─ paths.py              # 전역 경로 단일 진실 공급원 (SSOT)
-│     ├─ errors.py             # 구조화된 프로젝트 전용 예외 계층
-│     ├─ schema.py             # Pydantic v2 페르소나 데이터 스키마 (확장 필드 보존)
-│     ├─ loader.py             # data/*.json 비재귀적·결정론적 로더
-│     ├─ normalize.py          # Unicode NFC 및 줄바꿈 보수적 정규화
-│     ├─ environment.py        # Python, PyTorch, CUDA, GPU, 학습 라이브러리 상태 검사
-│     ├─ model.py              # 로컬 베이스 모델 오프라인 자산 무결성 검사
-│     ├─ dialogue.py           # 화자 매핑, 오염/콘텐츠 안전 분류, exchange 추출
-│     ├─ dataset.py            # SFT 레코드/제외 기록 빌더 (결정론적 변환기)
-│     ├─ split.py              # completion-text 그룹 기반 누수 방지 분할
-│     ├─ manifest.py           # SHA-256 해시 및 Provenance manifest 생성
-│     ├─ train.py              # 전체 파라미터 SFT 실행 (trl.SFTTrainer)
-│     ├─ evaluate.py           # 12개 카테고리 고정 회귀 평가 프롬프트 세트 및 채점
-│     ├─ export.py             # GGUF 변환(llama.cpp) 및 Ollama 등록
-│     └─ web/                  # 로컬 웹챗 UI (표준 라이브러리 HTTP 서버, 외부 프레임워크 불필요)
+├─ src/                        # src/<도메인>/<이름>.py, import 루트는 src
+│  ├─ common/                  # paths.py(경로), errors.py(예외), device.py(디바이스 선택)
+│  ├─ persona/                 # schema.py(페르소나 스키마), loader.py(data/*.json 로더)
+│  ├─ sft_dataset/             # normalize, dialogue, records, split, manifest, storage(JSONL 입출력)
+│  ├─ inspection/              # runtime_environment.py(CUDA/라이브러리), base_model_assets.py(모델 자산)
+│  ├─ inference/               # model_loader.py(모델·토크나이저 로드), generation.py(생성 설정·응답 생성)
+│  ├─ training/                # trainer.py(학습 설정 로드·SFT 실행)
+│  ├─ adapter/                 # spirit_adapter.py(정령 어댑터 추출·런타임)
+│  ├─ evaluation/              # regression.py(고정 회귀 평가)
+│  ├─ export/                  # gguf_ollama.py(GGUF 변환·Ollama 등록)
+│  ├─ web/                     # server.py, index.html, assets/ (로컬 웹챗)
+│  └─ cli/                     # entrypoint.py(garnet-evai, python -m cli), parser.py, *_commands.py(도메인별 명령)
 │
 ├─ tests/                      # test_paths/test_schema/test_loader/test_normalize/
 │                               # test_environment/test_model/test_dataset/test_web
@@ -84,7 +76,7 @@ fff/                             (프로젝트 루트, 패키지명은 GarnetRap
    - 정규 페르소나 데이터는 오직 `data/*.json`에만 위치합니다.
    - `data/personas/` 같은 하위 폴더는 생성하지 않으며 허용되지 않습니다.
 2. **비재귀적 탐색 및 결정론적 정렬**:
-   - `loader.py`는 `data/` 직하위의 `*.json` 파일만 수집합니다.
+   - `src/persona/loader.py`는 `data/` 직하위의 `*.json` 파일만 수집합니다.
    - 데이터셋 입력 처리는 파일명 기준 오름차순으로 엄격하게 정렬됩니다.
 3. **원본 불변성 (Immutability)**:
    - 원본 JSON 파일을 수정, 재포맷팅, 이동, 삭제하지 않습니다.

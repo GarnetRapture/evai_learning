@@ -20,13 +20,30 @@ dependencies = [
     "safetensors",
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
+    "peft",
 ]
 
 [project.scripts]
-garnet-evai = "GarnetRapture_evai:main"
+garnet-evai = "cli.entrypoint:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = [
+    "adapter",
+    "cli",
+    "common",
+    "evaluation",
+    "export",
+    "inference",
+    "inspection",
+    "persona",
+    "sft_dataset",
+    "training",
+    "web",
+]
+
+[tool.setuptools.package-data]
+web = ["index.html", "assets/**/*"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
@@ -54,6 +71,7 @@ ignore = []
 
 [tool.pyright]
 include = ["src", "tests"]
+extraPaths = ["src"]
 exclude = ["**/__pycache__", "models", "artifacts", "tmp-codex"]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"
