@@ -27,6 +27,10 @@ class TrainingSettings:
     seed: int
     base_dtype: str
     token_memory_limit_mib: int
+    preparation_workers: int
+    curriculum: str
+    replay_ratio: float
+    save_interval_seconds: int = 300
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,17 @@ def load_training_config(config_path: Path | None = None) -> TrainingConfig:
         raise ConfigurationError("Training length exceeds the fixed context", path)
     if training.token_memory_limit_mib <= 0:
         raise ConfigurationError("Token storage requires a positive CPU memory limit", path)
+    if training.preparation_workers <= 0:
+        raise ConfigurationError("CPU preparation requires a positive worker count", path)
+    if training.save_interval_seconds <= 0:
+        raise ConfigurationError("Latest-model save interval must be positive", path)
+    if training.curriculum not in {
+        "full", "dialogue_alignment", "knowledge_completion", "dialogue_extension",
+        "dialogue_context",
+    }:
+        raise ConfigurationError("Unknown single-model curriculum", path)
+    if not 0 < training.replay_ratio <= 1:
+        raise ConfigurationError("Dialogue replay ratio must be in (0, 1]", path)
     if not 0 <= optimizer.warmup_ratio <= 1 or optimizer.learning_rate <= 0:
         raise ConfigurationError("Invalid optimizer schedule", path)
     if optimizer.max_grad_norm <= 0 or optimizer.weight_decay < 0:

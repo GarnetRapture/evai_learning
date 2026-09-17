@@ -90,6 +90,25 @@ def connected_groups[T: HasCompletionText](records: list[T]) -> list[list[T]]:
     return [[records[index] for index in group] for group in connected_indices(keys_by_record)]
 
 
+def extend_split[T: HasCompletionText](
+    original: DatasetSplit[T], additions: list[T]
+) -> DatasetSplit[T]:
+    """Derived dialogue inherits its source partition without reshuffling seen examples."""
+    partitions = (original.train, original.validation, original.test)
+    ownership = {
+        id(record): index for index, records in enumerate(partitions) for record in records
+    }
+    result: list[list[T]] = [[], [], []]
+    records = [record for partition in partitions for record in partition]
+    for group in connected_groups([*records, *additions]):
+        inherited = {ownership[id(record)] for record in group if id(record) in ownership}
+        # A genuinely new event is training material. A bridge to any previously
+        # trained event must remain training material, never become a held-out event.
+        destination = min(inherited) if inherited else 0
+        result[destination].extend(group)
+    return DatasetSplit(*result)
+
+
 def leakage_safe_split[T: HasCompletionText](
     records: list[T], config: SplitConfig
 ) -> DatasetSplit[T]:

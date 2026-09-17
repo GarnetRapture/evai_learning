@@ -1,5 +1,7 @@
 """Load, tokenize and batch the canonical multilingual curriculum."""
 
+import hashlib
+import json
 from typing import Any
 
 import torch
@@ -8,7 +10,18 @@ from common.errors import EvaiError
 from sft_dataset.storage import message_list
 from spirit_dataset.records import TrainingTask
 from spirit_dataset.runtime_prompt import bind_spirit_identity
-from training.records import IGNORE_INDEX, EncodedRecord, TokenizedExample, TrainingBatch
+from training.records import (
+    IGNORE_INDEX,
+    EncodedRecord,
+    PreparedRecord,
+    TokenizedExample,
+    TrainingBatch,
+)
+
+
+def example_fingerprint(input_ids: list[int], prompt_tokens: int) -> str:
+    material = json.dumps((prompt_tokens, input_ids), separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(material).hexdigest()
 
 
 def template_ids(
@@ -23,38 +36,64 @@ def template_ids(
 def tokenize_records(
     tokenizer: Any, records: list[dict[str, Any]], max_length: int, *, spirit_id: str
 ) -> tuple[list[TokenizedExample], list[str]]:
-    examples: list[TokenizedExample] = []
-    over_length: list[str] = []
+    prepared = prepare_records(tokenizer, records, max_length, spirit_id=spirit_id)
+    return (
+        [item.example for item in prepared if item.example is not None],
+        [str(item.record["id"]) for item in prepared if item.example is None],
+    )
+
+
+def prepare_records(
+    tokenizer: Any, records: list[dict[str, Any]], max_length: int, *, spirit_id: str
+) -> list[PreparedRecord]:
+    prepared: list[PreparedRecord] = []
+    prompts = []
+    completions = []
     for record in records:
-        task = TrainingTask(record.get("task", TrainingTask.PERSONA_SPEECH.value))
         prompt = bind_spirit_identity(message_list(record["prompt"]), spirit_id)
         completion = message_list(record["completion"])
         if not prompt or prompt[-1]["role"] != "user":
             raise EvaiError(f"Record requires a final user context: {record['id']}")
         if len(completion) != 1 or completion[0]["role"] != "assistant":
             raise EvaiError(f"Record requires one assistant completion: {record['id']}")
-        prompt_ids = template_ids(tokenizer, prompt, generation_prompt=True)
-        full_ids = template_ids(tokenizer, [*prompt, *completion], generation_prompt=False)
+        prompts.append(prompt)
+        completions.append(completion)
+    prompt_batch = tokenizer.apply_chat_template(
+        prompts, add_generation_prompt=True, tokenize=True, return_dict=True
+    )["input_ids"]
+    full_batch = tokenizer.apply_chat_template(
+        [[*prompt, *completion] for prompt, completion in zip(prompts, completions, strict=True)],
+        add_generation_prompt=False,
+        tokenize=True,
+        return_dict=True,
+    )["input_ids"]
+    for record, prompt, completion, prompt_ids, full_ids in zip(
+        records, prompts, completions, prompt_batch, full_batch, strict=True
+    ):
+        task = TrainingTask(record.get("task", TrainingTask.PERSONA_SPEECH.value))
         if full_ids[: len(prompt_ids)] != prompt_ids or len(full_ids) <= len(prompt_ids):
             raise EvaiError(
                 f"Chat template prompt is not a prefix of the full sequence: {record['id']}"
             )
         if len(full_ids) > max_length:
-            over_length.append(str(record["id"]))
+            prepared.append(PreparedRecord(record, None))
             continue
         labels = [IGNORE_INDEX] * len(prompt_ids) + full_ids[len(prompt_ids) :]
-        examples.append(
-            TokenizedExample(
-                record_id=str(record["id"]),
-                prompt=prompt,
-                reference="\n".join(turn["content"] for turn in completion),
-                input_ids=full_ids,
-                labels=labels,
-                task=task.value,
-                language=str(record.get("language", "ko")),
+        prepared.append(
+            PreparedRecord(
+                record,
+                TokenizedExample(
+                    record_id=str(record["id"]),
+                    prompt=prompt,
+                    reference="\n".join(turn["content"] for turn in completion),
+                    input_ids=full_ids,
+                    labels=labels,
+                    task=task.value,
+                    language=str(record.get("language", "ko")),
+                ),
             )
         )
-    return examples, over_length
+    return prepared
 
 
 def collate(
@@ -68,6 +107,7 @@ def collate(
     attention_mask = torch.zeros(shape, dtype=torch.long, pin_memory=True)
     target_positions = torch.empty(target_count, dtype=torch.long, pin_memory=True)
     target_ids = torch.empty(target_count, dtype=torch.long, pin_memory=True)
+    target_weights = torch.empty(target_count, dtype=torch.float32, pin_memory=True)
     target_offset = 0
     for row, item in enumerate(batch):
         tokens = token_ids.narrow(0, item.token_offset, item.token_count)
@@ -75,11 +115,12 @@ def collate(
         attention_mask[row, : item.token_count] = 1
         count = item.token_count - item.prompt_tokens
         target_ids[target_offset : target_offset + count] = tokens[item.prompt_tokens :]
+        target_weights[target_offset : target_offset + count] = 1.0 / count
         target_positions[target_offset : target_offset + count] = torch.arange(
             row * width + item.prompt_tokens - 1, row * width + item.token_count - 1
         )
         target_offset += count
-    return TrainingBatch(input_ids, attention_mask, target_positions, target_ids)
+    return TrainingBatch(input_ids, attention_mask, target_positions, target_ids, target_weights)
 
 
 def move_batch(batch: TrainingBatch, device: str) -> TrainingBatch:
@@ -88,4 +129,5 @@ def move_batch(batch: TrainingBatch, device: str) -> TrainingBatch:
         batch.attention_mask.to(device, non_blocking=True),
         batch.target_positions.to(device, non_blocking=True),
         batch.target_ids.to(device, non_blocking=True),
+        batch.target_weights.to(device, non_blocking=True),
     )

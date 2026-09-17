@@ -8,8 +8,10 @@ from common.errors import EvaiError
 from common.messages import SFTRecordTurn
 from common.model_contract import BEHAVIOR_FIELDS
 from common.paths import SPIRIT_JUDGMENT_DIR
-from sft_dataset.split import DatasetSplit, SplitConfig, leakage_safe_split
+from sft_dataset.split import DatasetSplit, SplitConfig, extend_split, leakage_safe_split
+from sft_dataset.storage import sft_split_path
 from spirit_dataset.records import (
+    CONVERSATION_RECORD_PREFIX,
     ExclusionReason,
     JudgmentTrace,
     MemoryEvidence,
@@ -73,6 +75,7 @@ def split_with_judgments(
     records: list[SpiritTrainingRecord],
     config: SplitConfig,
     exclusions: list[SpiritExclusionRecord] | None = None,
+    previous: dict[str, int] | None = None,
 ) -> DatasetSplit[SpiritTrainingRecord]:
     accepted = []
     for record in judgment_training_records(records):
@@ -90,7 +93,25 @@ def split_with_judgments(
                 )
         else:
             accepted.append(record)
-    return leakage_safe_split(accepted, config)
+    if previous is not None:
+        retained: list[list[SpiritTrainingRecord]] = [[], [], []]
+        new = []
+        for record in accepted:
+            destination = previous.get(judgment_record_key(record.to_dict()))
+            if destination is None:
+                new.append(record)
+            else:
+                retained[destination].append(record)
+        return extend_split(DatasetSplit(*retained), new)
+    additions = []
+    original = []
+    for record in accepted:
+        record_id = record.id.removeprefix(f"{record.language}:")
+        if record_id.startswith(CONVERSATION_RECORD_PREFIX):
+            additions.append(record)
+        else:
+            original.append(record)
+    return extend_split(leakage_safe_split(original, config), additions)
 
 
 def spirit_judgment_path(slug: str) -> Path:
@@ -98,13 +119,33 @@ def spirit_judgment_path(slug: str) -> Path:
 
 
 def judgment_record_key(record: dict[str, Any]) -> str:
+    # Canonical annotations identify the immediate previous reply/current input.
+    # Restoring the preceding user's context must not invalidate source ownership.
+    context = [turn["content"] for turn in record["prompt"] if turn["role"] != "system"]
     material = {
         "source": {key: record["source"][key] for key in ("kind", "table", "keys")},
-        "context": [turn["content"] for turn in record["prompt"] if turn["role"] != "system"],
+        "context": context[-2:],
         "speech": [turn["content"] for turn in record["completion"]],
     }
     encoded = json.dumps(material, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def source_split_assignments(slug: str) -> dict[str, int] | None:
+    """Keep existing source-response events in their original dataset partition."""
+    paths = [sft_split_path(slug, split) for split in ("train", "validation", "test")]
+    existing = [path.is_file() for path in paths]
+    if not any(existing):
+        return None
+    if not all(existing):
+        raise EvaiError(f"Incomplete previous dataset partitions for {slug}")
+    assignments: dict[str, int] = {}
+    for destination, path in enumerate(paths):
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                record = json.loads(line)
+                assignments.setdefault(judgment_record_key(record), destination)
+    return assignments
 
 
 def apply_source_judgments(

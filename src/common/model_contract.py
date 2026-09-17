@@ -6,6 +6,7 @@ from typing import Any
 
 from common.errors import EvaiError
 from common.hashing import compute_file_sha256
+from common.model_storage import MODEL_MARKER, model_storage_lock, read_model_marker
 
 MODEL_ID = "LiquidAI/LFM2.5-230M-Base"
 MODEL_REVISION = "9d2be5519834990d30996f878b6771cccbd24f2c"
@@ -14,7 +15,7 @@ CONTEXT_LENGTH = 32768
 DATASET_VERSION = "2.1.0"
 TRAINING_LANGUAGES = {"ko": "kr", "en": "en", "zh_tw": "zh_tw"}
 MAX_MODEL_BYTES = 700_000_000
-TRAINING_CONTRACT_FILE = "evai_training.json"
+TRAINING_CONTRACT_FILE = MODEL_MARKER
 BEHAVIOR_FIELDS = ("interpretation", "emotion", "intention", "decision", "action")
 
 
@@ -60,22 +61,22 @@ def _verify_weights(path: Path) -> str:
 
 
 def verify_backbone(directory: Path) -> str:
-    validate_model_config(json.loads((directory / "config.json").read_text(encoding="utf-8")))
-    path = directory / "model.safetensors"
-    contract = read_training_contract(directory)
-    if contract is None:
-        return _verify_weights(path)
-    actual = compute_file_sha256(path)
-    if actual != contract["weights_sha256"]:
-        raise EvaiError("Trained model weights differ from their training provenance")
-    return actual
+    with model_storage_lock():
+        validate_model_config(json.loads((directory / "config.json").read_text(encoding="utf-8")))
+        path = directory / "model.safetensors"
+        contract = read_training_contract(directory)
+        if contract is None:
+            return _verify_weights(path)
+        actual = compute_file_sha256(path)
+        if actual != contract["weights_sha256"]:
+            raise EvaiError("Trained model weights differ from their training provenance")
+        return actual
 
 
 def read_training_contract(directory: Path) -> dict[str, Any] | None:
-    path = directory / TRAINING_CONTRACT_FILE
-    if not path.is_file():
+    contract = read_model_marker(directory)
+    if contract is None:
         return None
-    contract = json.loads(path.read_text(encoding="utf-8"))
     if (
         contract.get("base_model") != MODEL_ID
         or contract.get("origin_sha256") != WEIGHTS_SHA256

@@ -24,13 +24,13 @@ from sft_dataset.split import SplitConfig
 from sft_dataset.storage import persona_dataset_dir, sft_split_path, write_records_jsonl
 from spirit_dataset.curriculum import learns_narrative
 from spirit_dataset.judgment import (
-    SELF_MEMORY_CUE,
     apply_source_judgments,
+    source_split_assignments,
     spirit_judgment_path,
     split_with_judgments,
 )
 from spirit_dataset.language import LANGUAGE_CODES, render
-from spirit_dataset.lessons import persona_lessons
+from spirit_dataset.lessons import canonical_conversation_lessons, persona_lessons
 from spirit_dataset.memory import (
     MIN_LOVE_LEVEL,
     PastMemory,
@@ -92,6 +92,12 @@ def render_prompt(
 ) -> list[SFTRecordTurn]:
     turns = [SFTRecordTurn(role=SpeakerRole.SYSTEM.value, content="\n".join(record_memory))]
     if exchange.previous_spirit_text is not None:
+        previous_user = (
+            "\n".join(exchange.previous_user_items)
+            if exchange.previous_user_items
+            else exchange.situation
+        )
+        turns.append(SFTRecordTurn(role=SpeakerRole.USER.value, content=previous_user))
         turns.append(
             SFTRecordTurn(role=SpeakerRole.ASSISTANT.value, content=exchange.previous_spirit_text)
         )
@@ -141,7 +147,7 @@ class SpiritDatasetBuilder:
         memories.extend(
             (
                 memory.text,
-                "네가 예전에 겪은 일 하나 들려줄래?",
+                render("네가 예전에 겪은 일 하나 들려줄래?", profile.language),
                 (
                     MemoryEvidence(SourceClass.CANON_STORY, f"StoryInfo.No={memory.story_no}"),
                     *(
@@ -179,9 +185,7 @@ class SpiritDatasetBuilder:
                                 profile.language,
                             ),
                         ),
-                        SFTRecordTurn(
-                            "user", f"{render(SELF_MEMORY_CUE, profile.language)}\n{cue}"
-                        ),
+                        SFTRecordTurn("user", cue),
                     ],
                     completion=[SFTRecordTurn("assistant", text)],
                     source_class=SourceClass.DERIVED_MEMORY,
@@ -302,7 +306,9 @@ class SpiritDatasetBuilder:
             )
             for record in records
         ]
+        conversations = canonical_conversation_lessons(profile, records)
         records.extend(persona_lessons(profile, records))
+        records.extend(conversations)
         return records, exclusions, duplicates, past_memories
 
     def _manifest(
@@ -382,7 +388,9 @@ class SpiritDatasetBuilder:
             duplicates.update(repeated)
             profiles[language] = translated_profile.to_dict()
         episodic_count = len(past_memories)
-        split = split_with_judgments(records, self._split_config, exclusions)
+        split = split_with_judgments(
+            records, self._split_config, exclusions, source_split_assignments(identity.slug)
+        )
         records = [*split.train, *split.validation, *split.test]
         split_counts = {
             "train": len(split.train),

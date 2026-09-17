@@ -1,5 +1,5 @@
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from spirit_dataset.text_cleaning import is_quoted_utterance, unquote_utterance
@@ -36,6 +36,7 @@ class ScriptExchange:
     previous_spirit_text: str | None
     spirit_lines: tuple[ScriptLine, ...]
     context_keys: tuple[int, ...]
+    previous_user_items: tuple[str, ...] = ()
 
     @property
     def spirit_text(self) -> str:
@@ -65,6 +66,7 @@ class ScriptState:
     keys: tuple[int, ...] = ()
     previous: str | None = None
     buffer: tuple[ScriptLine, ...] = ()
+    previous_items: tuple[str, ...] = ()
 
 
 def choice_item(text: str) -> str:
@@ -124,11 +126,14 @@ class ScriptWalker:
             if not state.buffer and state.items:
                 unanswered.append(PendingVariant(list(state.items), list(state.keys)))
             self._flush(state, exchanges)
-        unique: dict[tuple[tuple[str, ...], str | None, tuple[int, ...]], ScriptExchange] = {}
+        unique: dict[
+            tuple[tuple[str, ...], tuple[str, ...], str | None, tuple[int, ...]], ScriptExchange
+        ] = {}
         for exchange in exchanges:
             unique.setdefault(
                 (
                     exchange.user_items,
+                    exchange.previous_user_items,
                     exchange.previous_spirit_text,
                     tuple(line.key for line in exchange.spirit_lines),
                 ),
@@ -149,9 +154,12 @@ class ScriptWalker:
                 previous_spirit_text=state.previous,
                 spirit_lines=state.buffer,
                 context_keys=state.keys,
+                previous_user_items=state.previous_items,
             )
         )
-        return ScriptState(previous=" ".join(line.text for line in state.buffer))
+        return ScriptState(
+            previous=" ".join(line.text for line in state.buffer), previous_items=state.items
+        )
 
     def _walk(
         self,
@@ -187,6 +195,7 @@ class ScriptWalker:
                             items=(*state.items, option_text),
                             keys=(*state.keys, *option_keys),
                             previous=state.previous,
+                            previous_items=state.previous_items,
                         )
                         for state in states
                     ]
@@ -206,12 +215,7 @@ class ScriptWalker:
                 continue
             if line.ui_type in SPEECH_UI_TYPES and self._is_spirit_line(line):
                 states = [
-                    ScriptState(
-                        state.items,
-                        state.keys,
-                        state.previous,
-                        (*state.buffer, line),
-                    )
+                    replace(state, buffer=(*state.buffer, line))
                     for state in states
                 ]
             else:
@@ -219,8 +223,10 @@ class ScriptWalker:
                 if item is not None:
                     states = list(
                         dict.fromkeys(
-                            ScriptState(
-                                (*flushed.items, item), (*flushed.keys, line.key), flushed.previous
+                            replace(
+                                flushed,
+                                items=(*flushed.items, item),
+                                keys=(*flushed.keys, line.key),
                             )
                             for state in states
                             for flushed in (self._flush(state, exchanges),)

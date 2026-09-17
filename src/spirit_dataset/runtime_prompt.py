@@ -8,10 +8,7 @@ from common.paths import DATASETS_DIR, SPIRIT_FILE_NAME
 from sft_dataset.dialogue import SpeakerRole
 from sft_dataset.storage import persona_dataset_dir
 from spirit_dataset.memory import (
-    MAX_LOVE_LEVEL,
-    MIN_LOVE_LEVEL,
     PastMemory,
-    compose_identity_prompt,
     past_memory_from_dict,
 )
 
@@ -35,7 +32,7 @@ def spirit_selection_header(slug: str) -> str:
 
 
 def bind_spirit_identity(messages: list[dict[str, str]], slug: str) -> list[dict[str, str]]:
-    """The same existing-token ID condition binds training and runtime inputs."""
+    """The model receives the selected ID; identity and feelings are learned weights."""
     if not messages or messages[0]["role"] != SpeakerRole.SYSTEM.value:
         raise EvaiError("Spirit training and conversations require a system identity")
     content = messages[0]["content"]
@@ -43,8 +40,13 @@ def bind_spirit_identity(messages: list[dict[str, str]], slug: str) -> list[dict
     if content.startswith("SpiritId: "):
         if not content.startswith(header):
             raise EvaiError(f"Dataset/system identity differs from its owner: {slug}")
-        return messages
-    return [{"role": SpeakerRole.SYSTEM.value, "content": header + content}, *messages[1:]]
+    return [
+        {
+            "role": SpeakerRole.SYSTEM.value,
+            "content": header,
+        },
+        *messages[1:],
+    ]
 
 
 def load_spirit_prompt_source(
@@ -73,17 +75,14 @@ def load_spirit_prompt_source(
 def build_chat_messages(
     source: SpiritPromptSource,
     user_message: str,
-    love_level: int,
     previous_spirit_text: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
 ) -> list[dict[str, str]]:
-    if not MIN_LOVE_LEVEL <= love_level <= MAX_LOVE_LEVEL:
-        raise EvaiError(f"love_level must be {MIN_LOVE_LEVEL}..{MAX_LOVE_LEVEL}: {love_level}")
-    system = compose_identity_prompt(source.identity_memory, love_level, language=source.language)
+    system = spirit_selection_header(source.slug)
     messages = [{"role": SpeakerRole.SYSTEM.value, "content": system}]
     if conversation_history:
         messages.extend(conversation_history)
     elif previous_spirit_text:
         messages.append({"role": SpeakerRole.ASSISTANT.value, "content": previous_spirit_text})
     messages.append({"role": SpeakerRole.USER.value, "content": user_message})
-    return bind_spirit_identity(messages, source.slug)
+    return messages

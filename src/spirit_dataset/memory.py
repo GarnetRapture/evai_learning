@@ -19,6 +19,14 @@ MIN_LOVE_LEVEL = 1
 MAX_LOVE_LEVEL = 40
 
 
+def source_love_level(value: int | None) -> int:
+    """Map absent/zero source metadata to the existing initial-bond convention."""
+    level = MIN_LOVE_LEVEL if value in (None, 0) else value
+    if not MIN_LOVE_LEVEL <= level <= MAX_LOVE_LEVEL:
+        raise EvaiError(f"Source love level must resolve to {MIN_LOVE_LEVEL}..{MAX_LOVE_LEVEL}")
+    return level
+
+
 @dataclass(frozen=True)
 class PastMemory:
     text: str
@@ -170,7 +178,7 @@ def compose_identity_prompt(
             render(
                 LOVE_LEVEL_MEMORY,
                 language,
-                level=love_level or MIN_LOVE_LEVEL,
+                level=source_love_level(love_level),
             ),
         )
     )

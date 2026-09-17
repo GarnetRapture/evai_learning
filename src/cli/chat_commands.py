@@ -14,7 +14,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
         if args.runtime is not None
         else SpiritRuntime([args.spirit], use_gguf=args.gguf)
     )
-    session = runtime.open_session(args.spirit, args.language, args.love_level)
+    session = runtime.open_session(args.spirit, args.language)
     for message in args.message:
         print(
             json.dumps(
@@ -38,5 +38,4 @@ def register(subparsers: SubParsers) -> None:
     parser.add_argument("--runtime", type=Path, help="The single PC runtime manifest")
     parser.add_argument("--gguf", action="store_true", help="Load the trained model's GGUF export")
     parser.add_argument("--language", choices=tuple(TRAINING_LANGUAGES), default="ko")
-    parser.add_argument("--love-level", type=int, default=1)
     parser.add_argument("--message", action="append", required=True)

@@ -8,16 +8,16 @@ from training.records import TrainingBatch
 
 
 def completion_token_loss(
-    model: Any, batch: TrainingBatch
+    model: Any, batch: TrainingBatch, *, per_example: bool = False
 ) -> torch.Tensor:
     hidden = model.model(
         input_ids=batch.input_ids, attention_mask=batch.attention_mask, use_cache=False
     ).last_hidden_state
     selected = hidden.flatten(0, 1).index_select(0, batch.target_positions)
     logits = model.lm_head(selected).float()
-    loss_sum = torch.nn.functional.cross_entropy(
+    token_losses = torch.nn.functional.cross_entropy(
         logits,
         batch.target_ids,
-        reduction="sum",
+        reduction="none",
     )
-    return loss_sum
+    return (token_losses * batch.target_weights).sum() if per_example else token_losses.sum()

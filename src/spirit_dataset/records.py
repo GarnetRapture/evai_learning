@@ -5,6 +5,8 @@ from typing import Any
 from common.messages import SFTRecordTurn
 
 MEMORY_LINE_MAX_LENGTH = 29
+CONVERSATION_RECORD_PREFIX = "conversation_question:"
+DIALOGUE_LESSON_PREFIX = f"{CONVERSATION_RECORD_PREFIX}persona_lesson:"
 
 
 class SourceClass(StrEnum):

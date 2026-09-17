@@ -3,18 +3,14 @@ import json
 
 from cli.command_registry import SubParsers, add_command, add_persona_id_argument, print_banner
 from common.paths import MODEL_DIR, REPORTS_DIR
+from evaluation.regression import run_regression_evaluation
+from inference.spirit_runtime import SpiritRuntime
+from spirit_dataset.roster import roster_slugs
+from spirit_dataset.runtime_prompt import load_spirit_prompt_source
 
 
 def cmd_evaluate(args: argparse.Namespace) -> int:
-    from evaluation.regression import run_regression_evaluation
-    from inference.spirit_runtime import SpiritRuntime
-    from spirit_dataset.roster import roster_slugs
-    from spirit_dataset.runtime_prompt import (
-        load_spirit_prompt_source,
-    )
-
     persona_id: str = args.persona_id
-    love_level: int = args.love_level
 
     print_banner(f"[evaluate] Fixed identity-regression evaluation: spirit '{persona_id}'")
 
@@ -29,7 +25,6 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
         source,
         profile["fields"],
         other_names,
-        love_level,
         weights_sha256=runtime.contract["weights_sha256"],
         base_model_name=runtime.model.config._name_or_path,
     )
@@ -56,7 +51,6 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
             {
                 **report.to_dict(),
                 "model_dir": str(MODEL_DIR),
-                "love_level": love_level,
                 "passed": passed,
                 "total": len(metrics),
                 "failed": sum(m.score == 0.0 for m in metrics),
@@ -81,6 +75,3 @@ def register(subparsers: SubParsers) -> None:
         cmd_evaluate,
     )
     add_persona_id_argument(command_parser)
-    command_parser.add_argument(
-        "--love-level", type=int, default=1, help="Bond level used in the memory prompt (1..40)"
-    )

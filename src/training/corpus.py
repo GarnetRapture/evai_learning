@@ -6,7 +6,8 @@ import random
 from array import array
 from collections import Counter
 from collections.abc import Iterator
-from dataclasses import dataclass
+from contextlib import closing
+from dataclasses import dataclass, replace
 from typing import Any
 
 import torch
@@ -17,9 +18,11 @@ from common.model_contract import DATASET_VERSION, TRAINING_LANGUAGES
 from sft_dataset.split import connected_indices
 from sft_dataset.storage import sft_split_path
 from spirit_dataset.curriculum import SpiritGrade, required_tasks
+from spirit_dataset.records import DIALOGUE_LESSON_PREFIX, SourceClass, TrainingTask
 from spirit_dataset.runtime_prompt import spirit_file_path
-from training.data import tokenize_records
+from training.data import example_fingerprint
 from training.records import IGNORE_INDEX, SHUFFLE_POOL_BATCHES, EncodedRecord
+from training.tokenization import ParallelTokenizer
 
 SPLITS = ("train", "validation", "test")
 
@@ -35,7 +38,23 @@ class TrainingCorpus:
 
     @classmethod
     def prepare(
-        cls, slugs: list[str], tokenizer: Any, max_length: int, token_memory_limit_bytes: int
+        cls,
+        slugs: list[str],
+        tokenizer: Any,
+        max_length: int,
+        token_memory_limit_bytes: int,
+        preparation_workers: int,
+    ) -> TrainingCorpus:
+        with closing(ParallelTokenizer(tokenizer, preparation_workers)) as encoder:
+            return cls._index(slugs, encoder, max_length, token_memory_limit_bytes)
+
+    @classmethod
+    def _index(
+        cls,
+        slugs: list[str],
+        encoder: ParallelTokenizer,
+        max_length: int,
+        token_memory_limit_bytes: int,
     ) -> TrainingCorpus:
         splits: dict[str, list[EncodedRecord]] = {split: [] for split in SPLITS}
         token_storage = array("i")
@@ -60,53 +79,63 @@ class TrainingCorpus:
                 path = sft_split_path(slug, split)
                 provenance[slug]["splits_sha256"][split] = compute_file_sha256(path)
                 before = len(splits[split])
-                with path.open("rb") as handle:
-                    while True:
-                        line = handle.readline()
-                        if not line:
-                            break
-                        if not line.strip():
-                            continue
-                        record = json.loads(line)
-                        examples, rejected = tokenize_records(
-                            tokenizer, [record], max_length, spirit_id=slug
+                for prepared in encoder.records(path, max_length, slug):
+                    record, example = prepared.record, prepared.example
+                    if example is None:
+                        excluded[f"{slug}/{split}"] += 1
+                        continue
+                    targets = sum(label != IGNORE_INDEX for label in example.labels[1:])
+                    if targets == 0:
+                        raise EvaiError(f"Record has no supervised response: {example.record_id}")
+                    required_bytes = (
+                        len(token_storage) + len(example.input_ids)
+                    ) * token_storage.itemsize
+                    if required_bytes > token_memory_limit_bytes:
+                        raise EvaiError(
+                            "Encoded corpus exceeds the configured CPU token memory limit: "
+                            f"{required_bytes} > {token_memory_limit_bytes} bytes"
                         )
-                        if rejected:
-                            excluded[f"{slug}/{split}"] += len(rejected)
-                            continue
-                        example = examples[0]
-                        targets = sum(label != IGNORE_INDEX for label in example.labels[1:])
-                        if targets == 0:
-                            raise EvaiError(
-                                f"Record has no supervised response: {example.record_id}"
+                    location = EncodedRecord(
+                        slug,
+                        len(token_storage),
+                        len(example.input_ids),
+                        len(example.input_ids) - targets,
+                        example.language,
+                        record["source_class"] == SourceClass.DERIVED_SPEECH
+                        or (
+                            example.task == TrainingTask.SELF_MEMORY
+                            and any(
+                                "Hero.NameSno" in item["reference"]
+                                for item in record.get("evidence", ())
                             )
-                        required_bytes = (
-                            len(token_storage) + len(example.input_ids)
-                        ) * token_storage.itemsize
-                        if required_bytes > token_memory_limit_bytes:
-                            raise EvaiError(
-                                "Encoded corpus exceeds the configured CPU token memory limit: "
-                                f"{required_bytes} > {token_memory_limit_bytes} bytes"
-                            )
-                        location = EncodedRecord(
-                            slug,
-                            len(token_storage),
-                            len(example.input_ids),
-                            len(example.input_ids) - targets,
-                        )
-                        token_storage.extend(example.input_ids)
-                        splits[split].append(location)
-                        locations.append((split, location))
-                        keys = list(record.get("event_keys", ()))
-                        keys.append(f"origin:{slug}:{record['id']}")
-                        if record.get("origin_id"):
-                            keys.append(f"origin:{slug}:{record['origin_id']}")
-                        answer = hashlib.sha256(example.reference.encode("utf-8")).hexdigest()
-                        keys.append(f"answer:{slug}:{answer}")
-                        keys_by_record.append(tuple(keys))
-                        if split == "train":
-                            tasks.add(example.task)
-                            languages.add(example.language)
+                        ),
+                        example.task == TrainingTask.SELF_MEMORY,
+                        example.record_id.removeprefix(f"{example.language}:").startswith(
+                            DIALOGUE_LESSON_PREFIX
+                        ),
+                        fingerprint=example_fingerprint(
+                            example.input_ids, len(example.input_ids) - targets
+                        ),
+                        task=TrainingTask(example.task),
+                        dialogue_context=(
+                            record["source_class"] == SourceClass.CANON_DIALOGUE
+                            and [turn["role"] for turn in example.prompt]
+                            == ["system", "user", "assistant", "user"]
+                        ),
+                    )
+                    token_storage.extend(example.input_ids)
+                    splits[split].append(location)
+                    locations.append((split, location))
+                    keys = list(record.get("event_keys", ()))
+                    keys.append(f"origin:{slug}:{record['id']}")
+                    if record.get("origin_id"):
+                        keys.append(f"origin:{slug}:{record['origin_id']}")
+                    answer = hashlib.sha256(example.reference.encode("utf-8")).hexdigest()
+                    keys.append(f"answer:{slug}:{answer}")
+                    keys_by_record.append(tuple(keys))
+                    if split == "train":
+                        tasks.add(example.task)
+                        languages.add(example.language)
                 if len(splits[split]) == before:
                     raise EvaiError(f"No usable {split} records for {slug}")
             required = {task.value for task in required_tasks(SpiritGrade(manifest["grade_sno"]))}
@@ -122,9 +151,13 @@ class TrainingCorpus:
         splits = {split: [] for split in SPLITS}
         moves: Counter[str] = Counter()
         for group in connected_indices(keys_by_record):
-            destination = min((locations[index][0] for index in group), key=SPLITS.index)
+            prior_destination = min((locations[index][0] for index in group), key=SPLITS.index)
+            contains_knowledge = any(locations[index][1].fixed_knowledge for index in group)
+            destination = "train" if contains_knowledge else prior_destination
             for index in group:
                 original, location = locations[index]
+                if location.fixed_knowledge and prior_destination != "train":
+                    location = replace(location, promoted_knowledge=True)
                 splits[destination].append(location)
                 if original != destination:
                     moves[f"{original}->{destination}"] += 1
@@ -144,15 +177,23 @@ class TrainingCorpus:
         return cls(splits, provenance, dict(excluded), dict(moves), token_ids, max_length)
 
     def batches(
-        self, split: str, batch_size: int, rng: random.Random | None = None
+        self,
+        split: str,
+        batch_size: int,
+        rng: random.Random | None = None,
+        skip_batches: int = 0,
     ) -> Iterator[list[EncodedRecord]]:
         ordered = list(self.splits[split])
         if rng is not None:
             rng.shuffle(ordered)
         pool_size = batch_size * SHUFFLE_POOL_BATCHES
+        batch_index = 0
         for start in range(0, len(ordered), pool_size):
             pool = sorted(ordered[start : start + pool_size], key=lambda item: item.token_count)
             batches = [pool[i : i + batch_size] for i in range(0, len(pool), batch_size)]
             if rng is not None:
                 rng.shuffle(batches)
-            yield from batches
+            for batch in batches:
+                if batch_index >= skip_batches:
+                    yield batch
+                batch_index += 1

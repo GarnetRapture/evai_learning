@@ -14,6 +14,7 @@ from safetensors import safe_open
 from common.errors import EvaiError
 from common.hashing import compute_file_sha256
 from common.model_contract import CONTEXT_LENGTH, MODEL_ID, read_training_contract, verify_backbone
+from common.model_storage import model_storage_lock
 from common.paths import GGUF_DIR, GGUF_MODEL_FILE, MODEL_DIR
 from inference.model_loader import load_tokenizer
 
@@ -109,6 +110,11 @@ def _add_tokenizer(writer: Any, config: dict[str, Any]) -> None:
 
 
 def export_model_gguf() -> Path:
+    with model_storage_lock():
+        return _export_model_gguf()
+
+
+def _export_model_gguf() -> Path:
     if read_training_contract(MODEL_DIR) is None:
         raise EvaiError("Train the single model before GGUF conversion")
     source_sha = verify_backbone(MODEL_DIR)

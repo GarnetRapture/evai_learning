@@ -55,6 +55,7 @@ class CanonicalExchange:
     spirit_text: str
     love_level: int | None
     emotion: str | None
+    previous_user_items: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -270,6 +271,7 @@ class SpiritSourceReader:
                 situation=situation,
                 user_items=exchange.user_items,
                 previous_spirit_text=exchange.previous_spirit_text,
+                previous_user_items=exchange.previous_user_items,
                 spirit_text=exchange.spirit_text,
                 love_level=love_level,
                 emotion=None,

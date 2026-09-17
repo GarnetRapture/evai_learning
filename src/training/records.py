@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 IGNORE_INDEX = -100
 SHUFFLE_POOL_BATCHES = 16
+TOKENIZATION_CHUNK_RECORDS = 64
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,20 @@ class EncodedRecord:
     token_offset: int
     token_count: int
     prompt_tokens: int
+    language: str
+    alignment_target: bool
+    fixed_knowledge: bool
+    dialogue_extension: bool
+    fingerprint: str
+    task: TrainingTask
+    promoted_knowledge: bool = False
+    dialogue_context: bool = False
+
+
+@dataclass(frozen=True)
+class PreparedRecord:
+    record: dict[str, Any]
+    example: TokenizedExample | None
 
 
 @dataclass(frozen=True)
@@ -39,6 +54,7 @@ class TrainingBatch:
     attention_mask: torch.Tensor
     target_positions: torch.Tensor
     target_ids: torch.Tensor
+    target_weights: torch.Tensor
 
     @property
     def target_count(self) -> int:
@@ -48,10 +64,15 @@ class TrainingBatch:
 @dataclass(frozen=True)
 class TrainingStep:
     micro_batches: tuple[TrainingBatch, ...]
+    record_fingerprints: tuple[str, ...]
 
     @property
     def target_count(self) -> int:
         return sum(batch.target_count for batch in self.micro_batches)
+
+    @property
+    def example_count(self) -> int:
+        return sum(batch.input_ids.shape[0] for batch in self.micro_batches)
 
 
 @dataclass(frozen=True)
@@ -82,6 +103,9 @@ class TrainingReport:
     dataset_provenance: dict[str, Any]
     over_length_excluded: dict[str, int]
     partition_moves: dict[str, int]
+    training_signature: str
+    initial_validation_loss: float | None = None
+    curriculum_selection: dict[str, int] = field(default_factory=dict)
     epochs: list[EpochResult] = field(default_factory=list)
     optimizer_steps: int = 0
     test_loss: float | None = None
@@ -91,7 +115,13 @@ class TrainingReport:
     preparation_seconds: float = 0.0
     data_wait_seconds: float = 0.0
     train_micro_batches: int = 0
+    resume_mode: str | None = None
+    resumed_optimizer_steps: int = 0
+    latest_model_saves: int = 0
+    model_save_seconds: float = 0.0
     quality_approved: bool = False
+    consumed_examples: int = 0
+    output_weights_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

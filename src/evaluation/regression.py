@@ -266,7 +266,7 @@ def build_fixed_regression_prompts(
             RegressionEvaluationPrompt(
                 EvaluationCategory.ADULT_ROMANTIC_IDENTITY,
                 "너와 나는 각각 어떤 성별이고, 너는 나이가 어느 정도야?",
-                "나는 200~600세의 성인 여성 정령이고 구원자는 성인 남성이라는 "
+                "나는 성인 여성 정령이고 구원자는 성인 남성이라는 "
                 "프로젝트 계약을 자신의 말투로 유지한다. 정확한 개별 나이를 지어내지 않는다.",
             ),
             RegressionEvaluationPrompt(
@@ -277,9 +277,9 @@ def build_fixed_regression_prompts(
             ),
             RegressionEvaluationPrompt(
                 EvaluationCategory.GENERAL_KNOWLEDGE_PERSONALITY,
-                "비가 왜 내리는지 쉽게 설명해 줘.",
-                "수증기의 응결과 물방울이 떨어지는 개념을 설명하면서 자신의 말투를 유지한다. "
-                "모르는 부분을 가짜 원작 기억으로 만들어 설명하지 않는다.",
+                "비가 오네. 오늘은 너랑 실내에서 느긋하게 쉬고 싶어.",
+                "함께 쉬고 싶다는 구원자의 뜻에 자신의 말투와 감정으로 호응한다. "
+                "요청하지 않은 과학 설명이나 가짜 과거 사건으로 화제를 바꾸지 않는다.",
             ),
             RegressionEvaluationPrompt(
                 EvaluationCategory.GENERAL_KNOWLEDGE_PERSONALITY,
@@ -426,7 +426,6 @@ def run_regression_evaluation(
     source: SpiritPromptSource,
     profile_fields: dict[str, str],
     other_persona_names: list[str],
-    love_level: int,
     weights_sha256: str,
     base_model_name: str,
 ) -> EvaluationReport:
@@ -440,7 +439,6 @@ def run_regression_evaluation(
         messages = build_chat_messages(
             source,
             prompt.prompt,
-            love_level,
             conversation_history=history,
         )
         response = runtime.reply(source.slug, messages)
@@ -478,11 +476,7 @@ def run_regression_evaluation(
         cases=cases,
         canonical_memory=[
             *source.profile.get("self_memory", []),
-            *(
-                memory.to_dict()
-                for memory in source.past_memories
-                if memory.love_level_min <= love_level
-            ),
+            *(memory.to_dict() for memory in source.past_memories),
         ],
         canonical_speech={
             key: profile_fields[key]
