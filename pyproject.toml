@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "GarnetRapture_evai"
 version = "0.1.0"
-description = "EVAI spirit identity training: Korean first, then English and Chinese; one LiquidAI/LFM2.5-230M-Base backbone with independent LoRA adapters"
+description = "EVAI: one jointly trained 230M model with platform-selected multilingual spirit identity"
 readme = "ARCHITECTURE.md"
 requires-python = ">=3.14"
 authors = [
@@ -20,7 +20,8 @@ dependencies = [
     "safetensors",
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
-    "peft",
+    "gguf",
+    "numpy",
 ]
 
 [project.scripts]
@@ -29,7 +30,6 @@ garnet-evai = "cli.entrypoint:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = [
-    "adapter",
     "cli",
     "common",
     "evaluation",

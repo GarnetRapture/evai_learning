@@ -14,6 +14,8 @@ class SourceClass(StrEnum):
     PROJECT_CONTRACT = "project_contract"
     DERIVED_MEMORY = "derived_memory"
     DERIVED_BEHAVIOR = "derived_behavior"
+    DERIVED_SPEECH = "derived_speech"
+    GENERAL_KNOWLEDGE = "general_knowledge"
 
 
 class TrainingTask(StrEnum):
@@ -47,6 +49,7 @@ class SelfMemory:
 
 
 class SourceKind(StrEnum):
+    PERSONA_LESSON = "persona_lesson"
     SELF_MEMORY = "self_memory"
     STORY = "story"
     EVERTALK = "evertalk"

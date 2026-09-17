@@ -6,6 +6,7 @@ from typing import Any
 
 from common.errors import EvaiError
 from common.messages import SFTRecordTurn
+from common.model_contract import BEHAVIOR_FIELDS
 from common.paths import SPIRIT_JUDGMENT_DIR
 from sft_dataset.split import DatasetSplit, SplitConfig, leakage_safe_split
 from spirit_dataset.records import (
@@ -43,8 +44,6 @@ def judgment_training_records(records: list[SpiritTrainingRecord]) -> list[Spiri
             ),
         )
         prompt[-1] = replace(prompt[-1], content=f"{SELF_JUDGMENT_CUE}\n{prompt[-1].content}")
-        from common.model_contract import BEHAVIOR_FIELDS
-
         target = json.dumps(
             {name: getattr(trace, name) for name in BEHAVIOR_FIELDS},
             ensure_ascii=False,
@@ -109,7 +108,7 @@ def judgment_record_key(record: dict[str, Any]) -> str:
 
 
 def apply_source_judgments(
-    slug: str, records: list[SpiritTrainingRecord]
+    slug: str, records: list[SpiritTrainingRecord], *, learn_behavior: bool = True
 ) -> tuple[list[SpiritTrainingRecord], list[SpiritExclusionRecord]]:
     path = spirit_judgment_path(slug)
     if not path.exists():
@@ -153,6 +152,10 @@ def apply_source_judgments(
                     original,
                 )
             )
+            used.add(key)
+            continue
+        if not learn_behavior:
+            output.append(record)
             used.add(key)
             continue
         raw = annotation["judgment"]

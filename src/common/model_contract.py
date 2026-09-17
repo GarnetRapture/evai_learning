@@ -1,20 +1,20 @@
 """The exact Korean EVAI backbone; no trainer or runtime may select another model."""
 
-import hashlib
 import json
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from common.errors import EvaiError
+from common.hashing import compute_file_sha256
 
 MODEL_ID = "LiquidAI/LFM2.5-230M-Base"
 MODEL_REVISION = "9d2be5519834990d30996f878b6771cccbd24f2c"
 WEIGHTS_SHA256 = "e91eb22c0aeae0bcbea8ade56f5cfe3cf91bca0c34e859adacae8f4445416fe6"
 CONTEXT_LENGTH = 32768
-DATASET_VERSION = "2.0.0"
+DATASET_VERSION = "2.1.0"
 TRAINING_LANGUAGES = {"ko": "kr", "en": "en", "zh_tw": "zh_tw"}
-ADAPTER_FORMAT = "evai.lora.curriculum.v2"
+MAX_MODEL_BYTES = 700_000_000
+TRAINING_CONTRACT_FILE = "evai_training.json"
 BEHAVIOR_FIELDS = ("interpretation", "emotion", "intention", "decision", "action")
 
 
@@ -52,10 +52,8 @@ def validate_model_config(config: dict[str, Any]) -> None:
         raise EvaiError("Backbone must retain the exact 8 LIV / 6 GQA layer order")
 
 
-@lru_cache(maxsize=4)
-def _verify_weights(path: str, size: int, modified_ns: int) -> str:
-    with Path(path).open("rb") as stream:
-        actual = hashlib.file_digest(stream, "sha256").hexdigest()
+def _verify_weights(path: Path) -> str:
+    actual = compute_file_sha256(path)
     if actual != WEIGHTS_SHA256:
         raise EvaiError(f"Backbone checksum differs from {MODEL_ID}@{MODEL_REVISION}: {actual}")
     return actual
@@ -64,5 +62,26 @@ def _verify_weights(path: str, size: int, modified_ns: int) -> str:
 def verify_backbone(directory: Path) -> str:
     validate_model_config(json.loads((directory / "config.json").read_text(encoding="utf-8")))
     path = directory / "model.safetensors"
-    stat = path.stat()
-    return _verify_weights(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    contract = read_training_contract(directory)
+    if contract is None:
+        return _verify_weights(path)
+    actual = compute_file_sha256(path)
+    if actual != contract["weights_sha256"]:
+        raise EvaiError("Trained model weights differ from their training provenance")
+    return actual
+
+
+def read_training_contract(directory: Path) -> dict[str, Any] | None:
+    path = directory / TRAINING_CONTRACT_FILE
+    if not path.is_file():
+        return None
+    contract = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        contract.get("base_model") != MODEL_ID
+        or contract.get("origin_sha256") != WEIGHTS_SHA256
+        or contract.get("training_mode") != "full_sft"
+        or not contract.get("spirits")
+        or not contract.get("weights_sha256")
+    ):
+        raise EvaiError("Invalid single-model training provenance")
+    return contract

@@ -1,0 +1,157 @@
+"""A small byte-offset index streams the mixed roster without token caches on disk."""
+
+import hashlib
+import json
+import random
+from collections import Counter
+from collections.abc import Iterator
+from contextlib import ExitStack
+from dataclasses import dataclass
+from typing import Any
+
+from common.errors import EvaiError
+from common.hashing import compute_file_sha256
+from common.model_contract import DATASET_VERSION, TRAINING_LANGUAGES
+from sft_dataset.split import connected_indices
+from sft_dataset.storage import sft_split_path
+from spirit_dataset.curriculum import SpiritGrade, required_tasks
+from spirit_dataset.runtime_prompt import spirit_file_path
+from training.data import tokenize_records
+from training.records import IGNORE_INDEX, SHUFFLE_POOL_BATCHES, RecordLocation, TokenizedExample
+
+SPLITS = ("train", "validation", "test")
+
+
+@dataclass
+class TrainingCorpus:
+    splits: dict[str, list[RecordLocation]]
+    provenance: dict[str, Any]
+    excluded: dict[str, int]
+    partition_moves: dict[str, int]
+    tokenizer: Any
+    max_length: int
+
+    @classmethod
+    def prepare(cls, slugs: list[str], tokenizer: Any, max_length: int) -> TrainingCorpus:
+        splits: dict[str, list[RecordLocation]] = {split: [] for split in SPLITS}
+        provenance: dict[str, Any] = {}
+        excluded: Counter[str] = Counter()
+        locations: list[tuple[str, RecordLocation]] = []
+        keys_by_record: list[tuple[str, ...]] = []
+        for number, slug in enumerate(slugs, 1):
+            profile_path = spirit_file_path(slug)
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+            manifest = profile["manifest"]
+            if manifest["dataset_version"] != DATASET_VERSION:
+                raise EvaiError(f"Stale canonical dataset for {slug}")
+            provenance[slug] = {
+                "profile_sha256": compute_file_sha256(profile_path),
+                "manifest": manifest,
+                "splits_sha256": {},
+            }
+            tasks: set[str] = set()
+            languages: set[str] = set()
+            for split in SPLITS:
+                path = sft_split_path(slug, split)
+                provenance[slug]["splits_sha256"][split] = compute_file_sha256(path)
+                before = len(splits[split])
+                with path.open("rb") as handle:
+                    while True:
+                        offset = handle.tell()
+                        line = handle.readline()
+                        if not line:
+                            break
+                        if not line.strip():
+                            continue
+                        record = json.loads(line)
+                        examples, rejected = tokenize_records(
+                            tokenizer, [record], max_length, spirit_id=slug
+                        )
+                        if rejected:
+                            excluded[f"{slug}/{split}"] += len(rejected)
+                            continue
+                        example = examples[0]
+                        targets = sum(label != IGNORE_INDEX for label in example.labels[1:])
+                        if targets == 0:
+                            raise EvaiError(
+                                f"Record has no supervised response: {example.record_id}"
+                            )
+                        location = RecordLocation(
+                            path, offset, slug, len(example.input_ids), targets
+                        )
+                        splits[split].append(location)
+                        locations.append((split, location))
+                        keys = list(record.get("event_keys", ()))
+                        keys.append(f"origin:{slug}:{record['id']}")
+                        if record.get("origin_id"):
+                            keys.append(f"origin:{slug}:{record['origin_id']}")
+                        answer = hashlib.sha256(example.reference.encode("utf-8")).hexdigest()
+                        keys.append(f"answer:{slug}:{answer}")
+                        keys_by_record.append(tuple(keys))
+                        if split == "train":
+                            tasks.add(example.task)
+                            languages.add(example.language)
+                if len(splits[split]) == before:
+                    raise EvaiError(f"No usable {split} records for {slug}")
+            required = {task.value for task in required_tasks(SpiritGrade(manifest["grade_sno"]))}
+            if not required <= tasks or languages != set(TRAINING_LANGUAGES):
+                raise EvaiError(
+                    f"Incomplete multilingual curriculum for {slug}: {tasks}, {languages}"
+                )
+            print(f"Indexed {number}/{len(slugs)}: {slug}", flush=True)
+        # Preserve every existing training record. Move connected holdout records
+        # with it rather than evaluating a shared event the model has already seen.
+        # Local record IDs and identical speech are spirit-owned; world/story event
+        # keys remain global so translations and cross-speaker scenes stay together.
+        splits = {split: [] for split in SPLITS}
+        moves: Counter[str] = Counter()
+        for group in connected_indices(keys_by_record):
+            destination = min((locations[index][0] for index in group), key=SPLITS.index)
+            for index in group:
+                original, location = locations[index]
+                splits[destination].append(location)
+                if original != destination:
+                    moves[f"{original}->{destination}"] += 1
+        if any(not records for records in splits.values()):
+            raise EvaiError("Joint curriculum requires independent train/validation/test events")
+        for slug, source in provenance.items():
+            source["joint_splits"] = {
+                split: sum(item.spirit_id == slug for item in records)
+                for split, records in splits.items()
+            }
+        print(f"Joint event partitions: {dict(moves)}", flush=True)
+        return cls(splits, provenance, dict(excluded), dict(moves), tokenizer, max_length)
+
+    def batches(
+        self, split: str, batch_size: int, rng: random.Random | None = None
+    ) -> Iterator[list[TokenizedExample]]:
+        ordered = list(self.splits[split])
+        if rng is not None:
+            rng.shuffle(ordered)
+        pool_size = batch_size * SHUFFLE_POOL_BATCHES
+        for start in range(0, len(ordered), pool_size):
+            pool = sorted(ordered[start : start + pool_size], key=lambda item: item.token_count)
+            batches = [pool[i : i + batch_size] for i in range(0, len(pool), batch_size)]
+            if rng is not None:
+                rng.shuffle(batches)
+            for batch in batches:
+                examples = []
+                with ExitStack() as stack:
+                    handles = {
+                        path: stack.enter_context(path.open("rb"))
+                        for path in {item.path for item in batch}
+                    }
+                    for location in batch:
+                        handle = handles[location.path]
+                        handle.seek(location.offset)
+                        record = json.loads(handle.readline())
+                        items, rejected = tokenize_records(
+                            self.tokenizer,
+                            [record],
+                            self.max_length,
+                            spirit_id=location.spirit_id,
+                        )
+                        if rejected or len(items[0].input_ids) != location.token_count:
+                            raise EvaiError(f"Dataset changed during training: {location.path}")
+                        examples.append(items[0])
+                yield examples

@@ -6,7 +6,7 @@ from spirit_dataset.builder import SpiritDatasetBuilder
 
 
 def cmd_build_dataset(args: argparse.Namespace) -> int:
-    print_banner("[build-dataset] Per-spirit LoRA datasets from data/tbl")
+    print_banner("[build-dataset] Spirit-owned curriculum for the single model from data/tbl")
     slugs = set(args.spirit) if args.spirit else None
     with closing(SpiritDatasetBuilder()) as builder:
         result = builder.build_all(slugs)
@@ -47,7 +47,7 @@ def register(subparsers: SubParsers) -> None:
     command_parser = add_command(
         subparsers,
         "build-dataset",
-        "Build per-spirit LoRA SFT datasets (memory + situation + canonical line) from data/tbl",
+        "Build spirit-owned SFT records (memory + situation + canonical line) from data/tbl",
         cmd_build_dataset,
     )
     command_parser.add_argument(

@@ -13,7 +13,7 @@ from common.paths import (
 from inspection.base_model_assets import inspect_local_model
 from inspection.runtime_environment import inspect_environment, validate_environment
 from persona.loader import discover_persona_files, inspect_persona_files
-from training.config import load_spirit_lora_config as load_training_config
+from training.config import load_training_config
 
 
 def cmd_env(args: argparse.Namespace) -> int:
@@ -142,7 +142,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     print("\n2. Artifact directories:")
     try:
         ensure_artifact_directories()
-        print("  -> artifacts/{datasets,adapters,merged,gguf,reports} directories ready.")
+        print("  -> artifacts/{datasets,reports} directories ready.")
     except OSError as err:
         print(f"  ! Failed to create artifact directories: {err}")
         checks_passed = False
@@ -160,7 +160,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     try:
         t_cfg = load_training_config(training_cfg_path)
         print(
-            f"  * training.yaml: OK (mode=lora_sft, "
+            f"  * training.yaml: OK (mode=full_sft, "
             f"dtype={t_cfg.training.base_dtype}, lr={t_cfg.optimizer.learning_rate}, "
             f"epochs={t_cfg.training.epochs})"
         )

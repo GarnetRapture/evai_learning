@@ -5,10 +5,12 @@ from common.errors import EvaiError
 from game_data.database import open_tbl_database
 from game_data.localization import StringResolver
 from game_data.references import StringTableReferences
+from spirit_dataset.curriculum import learns_narrative
 from spirit_dataset.language import render
 from spirit_dataset.records import MEMORY_LINE_MAX_LENGTH, MemoryEvidence, SelfMemory, SourceClass
 from spirit_dataset.roster import SpiritIdentity
 from spirit_dataset.text_cleaning import clean_game_text
+from spirit_dataset.world import shared_world_memories
 
 HERO_DESC_SHIFTED_COLUMNS: dict[str, str] = {
     "hobby": "UnionSno",
@@ -31,6 +33,7 @@ PROJECT_CONTRACT_MEMORY: tuple[tuple[str, str], ...] = (
     ("나와 대화하는 구원자는 성인 남성", "나는 어떤 존재야?"),
     ("나는 구원자에게 연애 감정을 품고 있어", "나를 어떤 마음으로 대하고 있어?"),
 )
+ANIMA_IDENTITY = "나는 무기에서 태어난 여성 정령 아니마"
 
 
 def core_identity_memory(identity_memory: tuple[str, ...]) -> tuple[str, ...]:
@@ -39,6 +42,7 @@ def core_identity_memory(identity_memory: tuple[str, ...]) -> tuple[str, ...]:
         for text, _ in PROJECT_CONTRACT_MEMORY
         for language in ("kr", "en", "zh_tw")
     }
+    contract_text.update(render(ANIMA_IDENTITY, language) for language in ("kr", "en", "zh_tw"))
     return tuple(
         dict.fromkeys(
             (
@@ -67,6 +71,10 @@ SHARED_WORLD_MEMORY: tuple[tuple[str, str, str], ...] = (
     ("천사형과 악마형 정령은 드물고 강하다", "main_story 6-11; 6-12", "천사형과 악마형은 흔해?"),
     ("계약한 구원자와는 인연의 끈이 이어진다", "main_story 8-1; 8-10", "우리 계약은 무슨 의미야?"),
 )
+WORLD_SELF_REFERENCES: dict[int, tuple[str, str]] = {
+    1010: ("메피스토펠레스는 방주의 인공 정령", "나는 방주의 인공 정령"),
+    5030: ("유리아는 솔레이 왕국의 여왕", "나는 솔레이 왕국의 여왕"),
+}
 PROFILE_MEMORY_CUES: dict[str, str] = {
     "nickname": "네 이명은 뭐야?",
     "race": "너는 어떤 유형의 정령이야?",
@@ -133,6 +141,8 @@ class SpiritProfile:
     def to_dict(self) -> dict[str, Any]:
         return {
             "hero_no": self.identity.hero_no,
+            "grade_sno": int(self.identity.grade),
+            "is_variant": self.identity.is_variant,
             "language": self.language,
             "slug": self.identity.slug,
             "name": self.identity.name,
@@ -249,6 +259,13 @@ class SpiritProfileRepository:
             f"Hero.No={identity.hero_no}; Hero.NameSno",
             render("네 이름이 뭐야?", language),
         )
+        if not learns_narrative(identity.grade):
+            add_memory(
+                render(ANIMA_IDENTITY, language),
+                SourceClass.PROJECT_CONTRACT,
+                "user_contract common_rare_anima",
+                render("넌 어떤 존재야?", language),
+            )
         for field_name, template in PROFILE_MEMORY_TEMPLATES.items():
             value = fields.get(field_name)
             if value is None:
@@ -271,12 +288,27 @@ class SpiritProfileRepository:
                     render(PROFILE_MEMORY_CUES[field_name], language),
                 )
         for text, source, cue in SHARED_WORLD_MEMORY:
+            if not learns_narrative(identity.grade) and not (
+                source.startswith("user_contract") or text == "나는 유물에 깃든 영혼인 정령"
+            ):
+                continue
             source_class = (
                 SourceClass.PROJECT_CONTRACT
                 if source.startswith("user_contract")
                 else SourceClass.CANON_STORY
             )
+            own_reference = WORLD_SELF_REFERENCES.get(identity.hero_no)
+            if own_reference is not None and text == own_reference[0]:
+                text = own_reference[1]
             add_memory(render(text, language), source_class, source, render(cue, language))
+
+        if learns_narrative(identity.grade):
+            for memory in shared_world_memories(language):
+                if len(memory.text) > MEMORY_LINE_MAX_LENGTH:
+                    raise EvaiError(f"Shared world fact exceeds memory contract: {memory.text}")
+                if memory.text not in accepted:
+                    accepted.append(memory.text)
+                    self_memory.append(memory)
 
         return SpiritProfile(
             identity=identity,

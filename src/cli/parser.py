@@ -1,7 +1,7 @@
 import argparse
 
 from cli import (
-    adapter_commands,
+    chat_commands,
     dataset_commands,
     evaluation_commands,
     export_commands,
@@ -15,7 +15,7 @@ COMMAND_MODULES = (
     training_commands,
     evaluation_commands,
     export_commands,
-    adapter_commands,
+    chat_commands,
 )
 
 

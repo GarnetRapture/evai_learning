@@ -1,6 +1,7 @@
-"""Training records and result types; no model allocation or I/O."""
+"""Shared training records; no model allocation or I/O."""
 
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 from spirit_dataset.records import TrainingTask
@@ -21,15 +22,12 @@ class TokenizedExample:
 
 
 @dataclass(frozen=True)
-class PreparedSpirit:
-    train: list[TokenizedExample]
-    validation: list[TokenizedExample]
-    test: list[TokenizedExample]
-    over_length: list[str]
-    source_analysis_examples: int
-    dataset_provenance: dict[str, Any]
-    training_tasks: dict[str, int] = field(default_factory=dict)
-    supervised_tokens_by_task: dict[str, int] = field(default_factory=dict)
+class RecordLocation:
+    path: Path
+    offset: int
+    spirit_id: str
+    token_count: int
+    target_tokens: int
 
 
 @dataclass(frozen=True)
@@ -49,38 +47,23 @@ class SampleGeneration:
 
 
 @dataclass
-class SpiritLoraReport:
-    slug: str
+class TrainingReport:
     config: dict[str, Any]
-    adapter_dir: str
+    model_dir: str
+    input_weights_sha256: str
+    trainable_parameters: int
     train_examples: int
     validation_examples: int
-    over_length_excluded: list[str]
-    trainable_parameters: int
-    optimizer_steps: int
-    base_validation_loss: float | None
+    test_examples: int
+    dataset_provenance: dict[str, Any]
+    over_length_excluded: dict[str, int]
+    partition_moves: dict[str, int]
     epochs: list[EpochResult] = field(default_factory=list)
-    samples: list[SampleGeneration] = field(default_factory=list)
+    optimizer_steps: int = 0
+    test_loss: float | None = None
     seconds: float = 0.0
     peak_memory_gib: float = 0.0
-    rank_trials: list[dict[str, Any]] = field(default_factory=list)
-    rank_selection_metric: str = ""
-    test_loss: float | None = None
-    source_analysis_examples: int = 0
-    target_contract: str = "self_memory+behavior_judgment+persona_speech"
-    training_tasks: dict[str, int] = field(default_factory=dict)
-    supervised_tokens_by_task: dict[str, int] = field(default_factory=dict)
-    dataset_provenance: dict[str, Any] = field(default_factory=dict)
     quality_approved: bool = False
-    phase_seconds: dict[str, float] = field(
-        default_factory=lambda: {
-            "prepare": 0.0,
-            "train": 0.0,
-            "validation": 0.0,
-            "samples": 0.0,
-            "save": 0.0,
-        }
-    )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -2,24 +2,19 @@ import argparse
 import json
 
 from cli.command_registry import SubParsers, add_command, add_persona_id_argument, print_banner
-from common.paths import REPORTS_DIR, spirit_adapter_dir
+from common.paths import MODEL_DIR, REPORTS_DIR
 
 
 def cmd_evaluate(args: argparse.Namespace) -> int:
-    from adapter.spirit_adapter import SpiritRuntime
     from evaluation.regression import run_regression_evaluation
+    from inference.spirit_runtime import SpiritRuntime
+    from spirit_dataset.roster import roster_slugs
     from spirit_dataset.runtime_prompt import (
         load_spirit_prompt_source,
     )
-    from training.data import roster_slugs
 
     persona_id: str = args.persona_id
     love_level: int = args.love_level
-    adapter_dir = spirit_adapter_dir(persona_id)
-    if not (adapter_dir / "adapter_config.json").exists():
-        print(f"! No spirit LoRA adapter found for '{persona_id}': {adapter_dir}")
-        print(f"  Run `garnet-evai train-spirit --spirit {persona_id}` first.")
-        return 1
 
     print_banner(f"[evaluate] Fixed identity-regression evaluation: spirit '{persona_id}'")
 
@@ -35,7 +30,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
         profile["fields"],
         other_names,
         love_level,
-        adapter_version=str(adapter_dir),
+        weights_sha256=runtime.contract["weights_sha256"],
         base_model_name=runtime.model.config._name_or_path,
     )
     metrics = report.metrics
@@ -60,7 +55,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
         json.dumps(
             {
                 **report.to_dict(),
-                "adapter_dir": str(adapter_dir),
+                "model_dir": str(MODEL_DIR),
                 "love_level": love_level,
                 "passed": passed,
                 "total": len(metrics),
@@ -82,7 +77,7 @@ def register(subparsers: SubParsers) -> None:
     command_parser = add_command(
         subparsers,
         "evaluate",
-        "Run the fixed identity-regression evaluation for one spirit LoRA adapter",
+        "Review the selected spirit's actual responses from the single trained model",
         cmd_evaluate,
     )
     add_persona_id_argument(command_parser)

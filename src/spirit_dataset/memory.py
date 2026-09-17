@@ -8,6 +8,7 @@ from common.errors import EvaiError
 from common.paths import SPIRIT_MEMORY_DIR
 from game_data.database import open_tbl_database
 from game_data.story import BOND_STORY_TYPES, MAIN_STORY_TYPE, StoryRepository
+from spirit_dataset.curriculum import owns_story
 from spirit_dataset.language import render
 from spirit_dataset.records import MEMORY_LINE_MAX_LENGTH, MemoryEvidence, SelfMemory, SourceClass
 from spirit_dataset.roster import SpiritIdentity
@@ -101,9 +102,10 @@ class PastMemoryRepository:
                 f"{location}: story {story_no} is StoryType {story_type}; "
                 "memory requires an owned bond story or an evidenced main-story experience"
             )
-        if story_type in BOND_STORY_TYPES and act != identity.hero_no:
+        if not owns_story(identity.hero_no, identity.is_variant, story_type, act):
             raise EvaiError(
-                f"{location}: bond story {story_no} belongs to hero {act}, not {identity.hero_no}"
+                f"{location}: story {story_no} is outside "
+                f"hero {identity.hero_no}'s story continuity"
             )
         if ending_affinity in ALTERNATE_ENDING_AFFINITIES:
             raise EvaiError(f"{location}: bond story {story_no} is an alternate ending branch")

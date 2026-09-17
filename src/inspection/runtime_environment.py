@@ -11,7 +11,6 @@ REQUIRED_LIBRARIES = (
     "accelerate",
     "trl",
     "safetensors",
-    "peft",
 )
 
 

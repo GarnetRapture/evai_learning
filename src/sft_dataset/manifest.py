@@ -1,18 +1,10 @@
-import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from common.hashing import compute_file_sha256
 from sft_dataset.split import DatasetSplit
-
-
-def compute_file_sha256(file_path: Path) -> str:
-    hasher = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        while chunk := f.read(65536):
-            hasher.update(chunk)
-    return hasher.hexdigest()
 
 
 @dataclass(frozen=True)

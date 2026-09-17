@@ -6,6 +6,7 @@ from game_data.database import open_tbl_database
 from game_data.localization import StringResolver
 from game_data.references import StringTableReferences
 from game_data.story import BOND_STORY_TYPES, MAIN_STORY_TYPE, StoryLine, StoryRepository
+from spirit_dataset.curriculum import owns_story
 from spirit_dataset.events import EventIndex
 from spirit_dataset.language import render
 from spirit_dataset.memory import ALTERNATE_ENDING_AFFINITIES
@@ -196,7 +197,9 @@ class SpiritSourceReader:
         for episode in self._episodes:
             if episode.talk_group not in groups:
                 continue
-            if episode.story_type in BOND_STORY_TYPES and episode.act != identity.hero_no:
+            if not owns_story(
+                identity.hero_no, identity.is_variant, episode.story_type, episode.act
+            ):
                 continue
             lines = self._episode_lines[episode.talk_group]
             group_skips: list[SourceSkip] = []

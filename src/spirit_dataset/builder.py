@@ -5,12 +5,14 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
+from common.hashing import compute_file_sha256
 from common.messages import SFTRecordTurn
 from common.model_contract import DATASET_VERSION
 from common.paths import (
     DATASETS_DIR,
     ROSTER_FILE_NAME,
     SPIRIT_FILE_NAME,
+    SPIRIT_LESSONS_FILE,
     TBL_DIR,
     ensure_artifact_directories,
 )
@@ -18,9 +20,9 @@ from game_data.localization import SourceLanguage, StringResolver
 from game_data.references import StringTableReferences
 from game_data.story import StoryRepository
 from sft_dataset.dialogue import SpeakerRole, TurnClassification, classify_dialogue_turn
-from sft_dataset.manifest import compute_file_sha256
 from sft_dataset.split import SplitConfig
 from sft_dataset.storage import persona_dataset_dir, sft_split_path, write_records_jsonl
+from spirit_dataset.curriculum import learns_narrative
 from spirit_dataset.judgment import (
     SELF_MEMORY_CUE,
     apply_source_judgments,
@@ -28,6 +30,7 @@ from spirit_dataset.judgment import (
     split_with_judgments,
 )
 from spirit_dataset.language import LANGUAGE_CODES, render
+from spirit_dataset.lessons import persona_lessons
 from spirit_dataset.memory import (
     MIN_LOVE_LEVEL,
     PastMemory,
@@ -199,7 +202,11 @@ class SpiritDatasetBuilder:
         list[SpiritTrainingRecord], list[SpiritExclusionRecord], Counter[str], list[PastMemory]
     ]:
         identity = profile.identity
-        past_memories = self._memories.load(identity) if profile.language == "kr" else []
+        past_memories = (
+            self._memories.load(identity)
+            if profile.language == "kr" and learns_narrative(identity.grade)
+            else []
+        )
         material = self._sources.read(profile)
         records: list[SpiritTrainingRecord] = []
         exclusions = [
@@ -269,7 +276,9 @@ class SpiritDatasetBuilder:
             for record in records
         ]
         if profile.language == "kr":
-            records, speaker_exclusions = apply_source_judgments(identity.slug, records)
+            records, speaker_exclusions = apply_source_judgments(
+                identity.slug, records, learn_behavior=learns_narrative(identity.grade)
+            )
             exclusions.extend(speaker_exclusions)
         # Validate annotations against all available memories first. Normal dialogue
         # then learns to speak from its weights without the answer in its system input.
@@ -293,6 +302,7 @@ class SpiritDatasetBuilder:
             )
             for record in records
         ]
+        records.extend(persona_lessons(profile, records))
         return records, exclusions, duplicates, past_memories
 
     def _manifest(
@@ -310,9 +320,12 @@ class SpiritDatasetBuilder:
             "dataset_version": SPIRIT_DATASET_VERSION,
             "created_at": datetime.now(UTC).isoformat(),
             "hero_no": profile.identity.hero_no,
+            "grade_sno": int(profile.identity.grade),
+            "is_variant": profile.identity.is_variant,
             "slug": profile.identity.slug,
             "name": profile.identity.name,
             "source_databases_sha256": self._source_hashes,
+            "authored_lessons_sha256": compute_file_sha256(SPIRIT_LESSONS_FILE),
             "episodic_memory_file": memory_path.name if memory_path.exists() else None,
             "episodic_memory_sha256": (
                 compute_file_sha256(memory_path) if memory_path.exists() else None
@@ -416,6 +429,7 @@ class SpiritDatasetBuilder:
                         SpiritDatasetBuilder(
                             self._split_config,
                             language,
+                            self._source_hashes,
                         )
                     )
                 )

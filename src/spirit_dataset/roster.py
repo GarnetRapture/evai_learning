@@ -1,17 +1,25 @@
+import json
 import re
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from common.errors import EvaiError
+from common.paths import DATASETS_DIR, ROSTER_FILE_NAME
 from game_data.database import open_tbl_database
 from game_data.localization import StringResolver
 from game_data.references import StringTableReferences
-from persona.loader import discover_persona_files, load_persona_file
+from spirit_dataset.curriculum import SpiritGrade
 
 SLUG_INVALID_CHARACTER_PATTERN = re.compile(r"[^a-z0-9]+")
-# Canonical HeroNo mapping recorded in docs/game_data_analysis.md section 4.
-LEGACY_HERO_SLUGS = {10: "irene", 20: "canney", 30: "pixie", 40: "casper"}
+
+
+def roster_slugs() -> list[str]:
+    path = DATASETS_DIR / ROSTER_FILE_NAME
+    if not path.is_file():
+        raise EvaiError(f"Spirit roster not found: {path}. Run `build-dataset` first.")
+    roster = json.loads(path.read_text(encoding="utf-8"))
+    return [str(spirit["slug"]) for spirit in roster["spirits"]]
 
 
 @dataclass(frozen=True)
@@ -20,58 +28,43 @@ class SpiritIdentity:
     slug: str
     name: str
     name_en: str | None
-    legacy_persona_file: Path | None
+    legacy_persona_file: Path | None = None
+    grade: SpiritGrade = SpiritGrade.EPIC
+    is_variant: bool = False
 
 
 @dataclass(frozen=True)
 class SpiritRoster:
     spirits: list[SpiritIdentity]
-    unmatched_legacy_files: list[Path]
+    unmatched_legacy_files: list[Path] = field(default_factory=list)
 
 
 def slug_from_english_name(name_en: str) -> str:
     return SLUG_INVALID_CHARACTER_PATTERN.sub("_", name_en.lower()).strip("_")
 
 
-def legacy_persona_names() -> dict[str, Path]:
-    names: dict[str, Path] = {}
-    for file_path in discover_persona_files():
-        persona = load_persona_file(file_path)
-        if persona.name in names:
-            raise EvaiError(f"Duplicate legacy persona name '{persona.name}': {file_path}")
-        names[persona.name] = file_path
-    return names
-
-
 def load_spirit_roster(resolver: StringResolver, references: StringTableReferences) -> SpiritRoster:
     name_table = references.string_table("Hero", "NameSno")
-    legacy_by_name = legacy_persona_names()
-    legacy_by_slug = {path.stem: path for path in legacy_by_name.values()}
-    matched_files: set[Path] = set()
     spirits: list[SpiritIdentity] = []
     used_slugs: dict[str, int] = {}
     with closing(open_tbl_database("hero")) as hero:
         rows = hero.execute(
-            "SELECT h.No, h.NameSno FROM Hero h WHERE h.IsCollectable = 1 "
+            "SELECT h.No, h.NameSno, h.GradeSno FROM Hero h WHERE h.IsCollectable = 1 "
             "AND EXISTS (SELECT 1 FROM HeroDesc d WHERE d.HeroNo = h.No) ORDER BY h.No"
         ).fetchall()
+    with closing(open_tbl_database("story")) as story:
+        variants = {
+            row["Act"]
+            for row in story.execute("SELECT DISTINCT Act FROM StoryInfo WHERE StoryType = 10")
+        }
     for row in rows:
         name = resolver.resolve_kr(name_table, row["NameSno"])
         name_en = resolver.resolve_text(name_table, row["NameSno"], "en")
         if not name:
             raise EvaiError(f"Hero {row['No']} has no Korean name")
-        legacy_file = (
-            legacy_by_slug.get(LEGACY_HERO_SLUGS[row["No"]])
-            if row["No"] in LEGACY_HERO_SLUGS
-            else legacy_by_name.get(name)
-        )
-        if legacy_file is not None:
-            slug = legacy_file.stem
-            matched_files.add(legacy_file)
-        elif name_en:
-            slug = slug_from_english_name(name_en)
-        else:
-            raise EvaiError(f"Hero {row['No']} has neither legacy persona nor English name")
+        if not name_en:
+            raise EvaiError(f"Hero {row['No']} has no canonical English name")
+        slug = slug_from_english_name(name_en)
         if slug in used_slugs:
             raise EvaiError(f"Slug '{slug}' collides for heroes {used_slugs[slug]} and {row['No']}")
         used_slugs[slug] = row["No"]
@@ -81,8 +74,8 @@ def load_spirit_roster(resolver: StringResolver, references: StringTableReferenc
                 slug=slug,
                 name=name,
                 name_en=name_en,
-                legacy_persona_file=legacy_file,
+                grade=SpiritGrade(row["GradeSno"]),
+                is_variant=row["No"] in variants,
             )
         )
-    unmatched = sorted(set(legacy_by_name.values()) - matched_files)
-    return SpiritRoster(spirits=spirits, unmatched_legacy_files=unmatched)
+    return SpiritRoster(spirits=spirits)

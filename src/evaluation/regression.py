@@ -3,11 +3,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from inference.generation import generate_from_messages
 from spirit_dataset.runtime_prompt import SpiritPromptSource, build_chat_messages
 
 if TYPE_CHECKING:
-    from adapter.spirit_adapter import SpiritRuntime
+    from inference.spirit_runtime import SpiritRuntime
 
 
 class EvaluationCategory(StrEnum):
@@ -51,7 +50,7 @@ class EvaluationMetric:
 class EvaluationReport:
     persona_id: str
     persona_name: str
-    adapter_version: str
+    weights_sha256: str
     base_model_name: str
     test_samples_count: int
     metrics: list[EvaluationMetric] = field(default_factory=list)
@@ -64,7 +63,7 @@ class EvaluationReport:
         return {
             "persona_id": self.persona_id,
             "persona_name": self.persona_name,
-            "adapter_version": self.adapter_version,
+            "weights_sha256": self.weights_sha256,
             "base_model_name": self.base_model_name,
             "test_samples_count": self.test_samples_count,
             "metrics": [
@@ -89,9 +88,7 @@ class EvaluationCase:
     prompt: RegressionEvaluationPrompt
     messages: list[dict[str, str]]
     response: str
-    base_response: str
     metric: EvaluationMetric
-    base_metric: EvaluationMetric
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -101,11 +98,8 @@ class EvaluationCase:
             "messages": self.messages,
             "expected_behavior": self.prompt.expected_spirit_behavior,
             "response": self.response,
-            "base_response": self.base_response,
             "score": self.metric.score,
             "details": self.metric.details,
-            "base_score": self.base_metric.score,
-            "base_details": self.base_metric.details,
         }
 
 
@@ -433,7 +427,7 @@ def run_regression_evaluation(
     profile_fields: dict[str, str],
     other_persona_names: list[str],
     love_level: int,
-    adapter_version: str,
+    weights_sha256: str,
     base_model_name: str,
 ) -> EvaluationReport:
     prompts = build_fixed_regression_prompts(source.name, other_persona_names, profile_fields)
@@ -450,8 +444,6 @@ def run_regression_evaluation(
             conversation_history=history,
         )
         response = runtime.reply(source.slug, messages)
-        with runtime.base_only():
-            base_response = generate_from_messages(runtime.model, runtime.tokenizer, messages)
         metric = score_response_against_prompt(response, prompt)
         metrics.append(metric)
         cases.append(
@@ -459,9 +451,7 @@ def run_regression_evaluation(
                 prompt=prompt,
                 messages=messages,
                 response=response,
-                base_response=base_response,
                 metric=metric,
-                base_metric=score_response_against_prompt(base_response, prompt),
             )
         )
         if prompt.conversation_id:
@@ -480,7 +470,7 @@ def run_regression_evaluation(
     return EvaluationReport(
         persona_id=source.slug,
         persona_name=source.name,
-        adapter_version=adapter_version,
+        weights_sha256=weights_sha256,
         base_model_name=base_model_name,
         test_samples_count=len(prompts),
         metrics=metrics,

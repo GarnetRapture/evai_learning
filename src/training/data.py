@@ -8,18 +8,10 @@ from typing import Any
 import torch
 
 from common.errors import EvaiError
-from common.paths import DATASETS_DIR, ROSTER_FILE_NAME
 from sft_dataset.storage import message_list, sft_split_path
 from spirit_dataset.records import TrainingTask
+from spirit_dataset.runtime_prompt import bind_spirit_identity
 from training.records import IGNORE_INDEX, SHUFFLE_POOL_BATCHES, TokenizedExample
-
-
-def roster_slugs() -> list[str]:
-    roster_path = DATASETS_DIR / ROSTER_FILE_NAME
-    if not roster_path.exists():
-        raise EvaiError(f"Spirit roster not found: {roster_path}. Run `build-dataset` first.")
-    roster = json.loads(roster_path.read_text(encoding="utf-8"))
-    return [str(spirit["slug"]) for spirit in roster["spirits"]]
 
 
 def read_split_records(slug: str, split: str) -> tuple[list[dict[str, Any]], str | None]:
@@ -41,13 +33,13 @@ def template_ids(
 
 
 def tokenize_records(
-    tokenizer: Any, records: list[dict[str, Any]], max_length: int
+    tokenizer: Any, records: list[dict[str, Any]], max_length: int, *, spirit_id: str
 ) -> tuple[list[TokenizedExample], list[str]]:
     examples: list[TokenizedExample] = []
     over_length: list[str] = []
     for record in records:
         task = TrainingTask(record.get("task", TrainingTask.PERSONA_SPEECH.value))
-        prompt = message_list(record["prompt"])
+        prompt = bind_spirit_identity(message_list(record["prompt"]), spirit_id)
         completion = message_list(record["completion"])
         if not prompt or prompt[-1]["role"] != "user":
             raise EvaiError(f"Record requires a final user context: {record['id']}")

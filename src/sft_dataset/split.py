@@ -51,9 +51,9 @@ def _completion_group_key(record: HasCompletionText) -> str:
     return "␟".join(turn.content for turn in record.completion)
 
 
-def connected_groups[T: HasCompletionText](records: list[T]) -> list[list[T]]:
-    """Transitive closure of events, paired tasks and identical target text."""
-    parents = list(range(len(records)))
+def connected_indices(keys_by_record: list[tuple[str, ...]]) -> list[list[int]]:
+    """One component owner for dataset and joint-model event grouping."""
+    parents = list(range(len(keys_by_record)))
 
     def find(index: int) -> int:
         while parents[index] != index:
@@ -62,7 +62,20 @@ def connected_groups[T: HasCompletionText](records: list[T]) -> list[list[T]]:
         return index
 
     owners: dict[str, int] = {}
-    for index, record in enumerate(records):
+    for index, keys in enumerate(keys_by_record):
+        for key in keys:
+            previous = owners.setdefault(key, index)
+            parents[find(index)] = find(previous)
+    groups: dict[int, list[int]] = {}
+    for index in range(len(keys_by_record)):
+        groups.setdefault(find(index), []).append(index)
+    return list(groups.values())
+
+
+def connected_groups[T: HasCompletionText](records: list[T]) -> list[list[T]]:
+    """Transitive closure of events, paired tasks and identical target text."""
+    keys_by_record: list[tuple[str, ...]] = []
+    for record in records:
         keys: list[str] = list(getattr(record, "event_keys", ()))
         origin = getattr(record, "origin_id", None)
         if origin:
@@ -73,13 +86,8 @@ def connected_groups[T: HasCompletionText](records: list[T]) -> list[list[T]]:
         answer = _completion_group_key(record)
         if answer:
             keys.append(f"answer:{answer}")
-        for key in keys:
-            previous = owners.setdefault(key, index)
-            parents[find(index)] = find(previous)
-    groups: dict[int, list[T]] = {}
-    for index, record in enumerate(records):
-        groups.setdefault(find(index), []).append(record)
-    return list(groups.values())
+        keys_by_record.append(tuple(keys))
+    return [[records[index] for index in group] for group in connected_indices(keys_by_record)]
 
 
 def leakage_safe_split[T: HasCompletionText](
@@ -95,6 +103,9 @@ def leakage_safe_split[T: HasCompletionText](
     groups.sort(key=lambda group: min(_completion_group_key(record) for record in group))
     rng = random.Random(config.seed)
     rng.shuffle(groups)
+    # Place large indivisible events before small ones. Otherwise a late event can
+    # consume the validation reserve and leave an authored curriculum out of training.
+    groups.sort(key=len, reverse=True)
 
     total = len(records)
     partitions: list[list[T]] = [[], [], []]
