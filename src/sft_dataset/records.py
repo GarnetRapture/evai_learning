@@ -4,9 +4,7 @@ from typing import Any
 from sft_dataset.dialogue import (
     DialogueExchange,
     DialogueExtractionResult,
-    SpeakerRole,
     TurnClassification,
-    classify_dialogue_turn,
 )
 from sft_dataset.normalize import is_empty_text, normalize_text
 
@@ -155,83 +153,3 @@ def build_persona_dataset(
     return records, exclusions
 
 
-def build_completion_only_record(
-    text: str,
-    persona_id: str,
-    persona_name: str,
-    language: str,
-    source_type: str,
-    source_file: str,
-    source_index: int,
-) -> SFTDatasetRecord | ExclusionRecord | None:
-    if is_empty_text(text):
-        return None
-
-    normalized = normalize_text(text)
-    classification = classify_dialogue_turn(
-        SpeakerRole.ASSISTANT, persona_name, normalized, source_type
-    )
-    if classification is not TurnClassification.ACCEPTED:
-        return ExclusionRecord(
-            persona_id=persona_id,
-            persona_name=persona_name,
-            classification=classification,
-            source_type=source_type,
-            source_file=source_file,
-            source_index=source_index,
-            speaker_names=[persona_name],
-            completion_preview=normalized[:80],
-        )
-
-    completion = [SFTRecordTurn(role=SpeakerRole.ASSISTANT.value, content=normalized)]
-    return SFTDatasetRecord(
-        id=f"{persona_id}:{source_type}:{source_index}",
-        persona_id=persona_id,
-        persona_name=persona_name,
-        language=language,
-        source_type=source_type,
-        source_file=source_file,
-        source_index=source_index,
-        prompt=[],
-        completion=completion,
-        assistant_segments=[normalized],
-    )
-
-
-def build_speech_pattern_records(
-    speech_patterns: list[str],
-    persona_id: str,
-    persona_name: str,
-    language: str,
-    source_file: str,
-) -> tuple[list[SFTDatasetRecord], list[ExclusionRecord]]:
-    records: list[SFTDatasetRecord] = []
-    exclusions: list[ExclusionRecord] = []
-    for index, pattern in enumerate(speech_patterns):
-        result = build_completion_only_record(
-            pattern, persona_id, persona_name, language, "speech_pattern", source_file, index
-        )
-        if isinstance(result, SFTDatasetRecord):
-            records.append(result)
-        elif isinstance(result, ExclusionRecord):
-            exclusions.append(result)
-    return records, exclusions
-
-
-def build_greeting_record(
-    greeting: str | None,
-    persona_id: str,
-    persona_name: str,
-    language: str,
-    source_file: str,
-) -> tuple[SFTDatasetRecord | None, ExclusionRecord | None]:
-    if greeting is None:
-        return None, None
-    result = build_completion_only_record(
-        greeting, persona_id, persona_name, language, "greeting", source_file, 0
-    )
-    if isinstance(result, SFTDatasetRecord):
-        return result, None
-    if isinstance(result, ExclusionRecord):
-        return None, result
-    return None, None

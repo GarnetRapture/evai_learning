@@ -45,6 +45,7 @@ class EnvironmentReport:
     gpu_count: int
     gpus: list[GpuInfo]
     libraries: dict[str, LibraryStatus]
+    runtime_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -55,6 +56,7 @@ class EnvironmentReport:
             "torch_cuda_version": self.torch_cuda_version,
             "cuda_available": self.cuda_available,
             "gpu_count": self.gpu_count,
+            "runtime_error": self.runtime_error,
             "gpus": [
                 {
                     "index": g.index,
@@ -94,6 +96,7 @@ def inspect_environment() -> EnvironmentReport:
     torch_cuda: str | None = None
     cuda_avail = False
     gpus: list[GpuInfo] = []
+    runtime_error: str | None = None
 
     try:
         import torch
@@ -108,8 +111,9 @@ def inspect_environment() -> EnvironmentReport:
                 name = torch.cuda.get_device_name(idx)
                 mem = torch.cuda.get_device_properties(idx).total_memory
                 gpus.append(GpuInfo(index=idx, name=name, total_memory_bytes=mem))
-    except Exception:
+    except Exception as err:
         cuda_avail = False
+        runtime_error = f"{type(err).__name__}: {err}"
 
     libraries: dict[str, LibraryStatus] = {}
     for lib_name in REQUIRED_LIBRARIES:
@@ -125,6 +129,7 @@ def inspect_environment() -> EnvironmentReport:
         gpu_count=len(gpus),
         gpus=gpus,
         libraries=libraries,
+        runtime_error=runtime_error,
     )
 
 
@@ -134,12 +139,16 @@ def validate_environment(
     env = report if report is not None else inspect_environment()
     defects: list[str] = []
 
+    if env.runtime_error is not None:
+        defects.append(f"PyTorch runtime inspection failed: {env.runtime_error}")
+
     if not env.cuda_available:
         defects.append("PyTorch runtime CUDA is not available. GPU acceleration is required.")
 
     for name in REQUIRED_LIBRARIES:
         status = env.libraries.get(name)
         if status is None or not status.installed:
-            defects.append(f"Required library '{name}' is not installed.")
+            reason = status.error if status is not None else "No package status available"
+            defects.append(f"Required library '{name}' is unavailable: {reason}")
 
     return (len(defects) == 0, defects)

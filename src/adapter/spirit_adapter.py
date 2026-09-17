@@ -1,6 +1,9 @@
+import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 from safetensors.torch import load_file
@@ -8,9 +11,17 @@ from safetensors.torch import load_file
 from common.device import select_torch_device
 from common.errors import EvaiError
 from common.paths import ADAPTERS_DIR, MERGED_DIR, MODEL_DIR
-from inference.generation import DEFAULT_GENERATION_SETTINGS, GenerationSettings, generate_reply
+from inference.generation import (
+    DEFAULT_GENERATION_SETTINGS,
+    GenerationSettings,
+    generate_from_messages,
+    generate_reply,
+)
 from inference.model_loader import load_causal_lm, load_tokenizer
 from sft_dataset.storage import read_split_conversations, sft_split_path
+
+if TYPE_CHECKING:
+    from transformers import Lfm2ForCausalLM
 
 LORA_LINEAR_SUFFIXES: tuple[str, ...] = (
     "in_proj",
@@ -32,6 +43,19 @@ FULL_COPY_SUFFIXES: tuple[str, ...] = (
     "q_layernorm",
     "k_layernorm",
 )
+
+
+def measured_lora_targets(model: Any) -> list[str]:
+    if model.config.model_type != "lfm2" or model.config.num_hidden_layers != 14:
+        raise EvaiError("Expected the 14-layer LFM2.5-230M backbone")
+    targets = [
+        name for name, module in model.named_modules()
+        if isinstance(module, torch.nn.Linear) and name != TIED_HEAD_MODULE
+    ]
+    unexpected = [name for name in targets if name.rsplit(".", 1)[-1] not in LORA_LINEAR_SUFFIXES]
+    if unexpected or not targets:
+        raise EvaiError(f"Unexpected LFM2 linear module layout: {unexpected}")
+    return targets
 
 
 @dataclass(frozen=True)
@@ -287,6 +311,11 @@ def verify_runtime_fidelity(
 
 def load_untied_base_model(dtype: torch.dtype) -> Any:
     model = load_causal_lm(dtype=dtype)
+    untie_input_output_embeddings(model)
+    return model
+
+
+def untie_input_output_embeddings(model: Any) -> None:
     embed = model.get_input_embeddings()
     head = model.get_output_embeddings()
     if not isinstance(embed, torch.nn.Embedding) or not isinstance(head, torch.nn.Linear):
@@ -297,7 +326,6 @@ def load_untied_base_model(dtype: torch.dtype) -> Any:
     model.config.tie_word_embeddings = False
     if head.weight.data_ptr() == embed.weight.data_ptr():
         raise EvaiError("Failed to untie lm_head from embed_tokens")
-    return model
 
 
 def build_spirit_lora_config(rank: int) -> Any:
@@ -387,15 +415,36 @@ class SpiritRuntime:
         root = adapters_root if adapters_root is not None else ADAPTERS_DIR
         device = select_torch_device()
         self.tokenizer = load_tokenizer()
-        base = load_untied_base_model(torch.bfloat16)
+        configs = [json.loads((root / pid / "adapter_config.json").read_text(encoding="utf-8"))
+                   for pid in persona_ids]
+        needs_head = any(TIED_HEAD_MODULE in cfg["target_modules"] for cfg in configs)
+        base = (load_untied_base_model(torch.bfloat16) if needs_head
+                else load_causal_lm(dtype=torch.bfloat16))
         first, *rest = persona_ids
+        self.adapters_root = root
         self.model = PeftModel.from_pretrained(base, str(root / first), adapter_name=first)
         for persona_id in rest:
             self.model.load_adapter(str(root / persona_id), adapter_name=persona_id)
         self.model.to(device)
         self.model.eval()
+        self.model.requires_grad_(False)
         self.device = device
         self.active_persona: str = first
+
+    def ensure_adapter(self, persona_id: str) -> None:
+        if persona_id in self.model.peft_config:
+            return
+        adapter_path = self.adapters_root / persona_id
+        if not (adapter_path / "adapter_config.json").exists():
+            raise EvaiError(f"Spirit adapter not found: {adapter_path}")
+        config = json.loads((adapter_path / "adapter_config.json").read_text(encoding="utf-8"))
+        base = cast("Lfm2ForCausalLM", self.model.get_base_model())
+        if TIED_HEAD_MODULE in config["target_modules"] and base.config.tie_word_embeddings:
+            untie_input_output_embeddings(base)
+        self.model.load_adapter(str(adapter_path), adapter_name=persona_id)
+        self.model.to(self.device)
+        self.model.eval()
+        self.model.requires_grad_(False)
 
     @property
     def persona_ids(self) -> list[str]:
@@ -405,6 +454,8 @@ class SpiritRuntime:
         if persona_id not in self.model.peft_config:
             raise EvaiError(f"Spirit adapter '{persona_id}' is not loaded in this runtime")
         self.model.set_adapter(persona_id)
+        self.model.eval()
+        self.model.requires_grad_(False)
         self.active_persona = persona_id
 
     def token_log_probs(self, input_ids: torch.Tensor) -> torch.Tensor:
@@ -412,7 +463,25 @@ class SpiritRuntime:
             logits = self.model(input_ids=input_ids.to(self.device)).logits[0].float()
         return torch.log_softmax(logits, dim=-1).cpu()
 
+    @contextmanager
+    def base_only(self) -> Iterator[None]:
+        try:
+            with self.model.disable_adapter():
+                yield
+        finally:
+            self.model.requires_grad_(False)
+
     def generate(
         self, user_message: str, settings: GenerationSettings = DEFAULT_GENERATION_SETTINGS
     ) -> str:
         return generate_reply(self.model, self.tokenizer, user_message, settings)
+
+    def reply(
+        self,
+        persona_id: str,
+        messages: list[dict[str, str]],
+        settings: GenerationSettings = DEFAULT_GENERATION_SETTINGS,
+    ) -> str:
+        self.ensure_adapter(persona_id)
+        self.activate(persona_id)
+        return generate_from_messages(self.model, self.tokenizer, messages, settings)

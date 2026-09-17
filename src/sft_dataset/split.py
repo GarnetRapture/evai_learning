@@ -23,7 +23,12 @@ class SplitConfig:
 
     def validate(self) -> bool:
         total = self.train_ratio + self.val_ratio + self.test_ratio
-        return abs(total - 1.0) < 1e-6
+        return (
+            all(0.0 <= ratio <= 1.0 for ratio in (
+                self.train_ratio, self.val_ratio, self.test_ratio,
+            ))
+            and abs(total - 1.0) < 1e-6
+        )
 
 
 @dataclass(frozen=True)
@@ -46,7 +51,7 @@ def leakage_safe_split[T: HasCompletionText](
 ) -> DatasetSplit[T]:
     if not config.validate():
         raise ValueError(
-            f"Split ratios must sum to 1.0: got "
+            f"Split ratios must each be in 0..1 and sum to 1.0: got "
             f"{config.train_ratio} + {config.val_ratio} + {config.test_ratio}"
         )
 

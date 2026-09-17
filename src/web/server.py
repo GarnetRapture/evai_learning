@@ -9,12 +9,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from common.device import select_torch_device
-from common.paths import DATA_DIR, MERGED_DIR
-from inference.generation import generate_reply
-from inference.model_loader import load_model_and_tokenizer
+from common.errors import EvaiError
+from common.paths import DATA_DIR, DATASETS_DIR, spirit_adapter_dir
 from persona.loader import discover_persona_files, load_persona_file
 from persona.schema import PersonaData
+from spirit_dataset.builder import ROSTER_FILE_NAME
+from spirit_dataset.memory import MAX_LOVE_LEVEL, MIN_LOVE_LEVEL
+from spirit_dataset.runtime_prompt import (
+    SpiritPromptSource,
+    build_chat_messages,
+    load_spirit_prompt_source,
+    spirit_file_path,
+)
 
 WEB_DIR = Path(__file__).resolve().parent
 INDEX_HTML_PATH = WEB_DIR / "index.html"
@@ -137,13 +143,31 @@ class PersonaStore:
 
     def _load_all(self) -> None:
         files = discover_persona_files(self.data_dir)
+        roster = json.loads((DATASETS_DIR / ROSTER_FILE_NAME).read_text(encoding="utf-8"))
+        registered = {entry["slug"]: entry for entry in roster["spirits"]}
         self._cache.clear()
         self._summaries.clear()
 
         for file_path in files:
             persona_id = file_path.stem
+            if persona_id not in registered:
+                continue
             try:
                 persona = load_persona_file(file_path)
+                canonical = json.loads(spirit_file_path(persona_id).read_text(encoding="utf-8"))
+                profile = canonical["profile"]
+                fields = profile["fields"]
+                persona.id = str(profile["hero_no"])
+                persona.name = profile["name"]
+                persona.race = fields.get("race", persona.race)
+                persona.profile.nick_name = fields.get("nickname")
+                persona.profile.union = fields.get("union")
+                for field in ("like", "dislike", "hobby", "speciality"):
+                    setattr(persona.profile, field, [
+                        item.strip() for item in fields.get(field, "").split(",") if item.strip()
+                    ])
+                persona.personality.description = fields.get("introduction")
+                persona.personality.greeting = fields.get("greeting")
                 self._cache[persona_id] = persona
 
                 assets = find_persona_assets(persona_id, persona.race)
@@ -171,8 +195,10 @@ class PersonaStore:
                     "assets": assets,
                 }
                 self._summaries.append(summary)
-            except Exception as err:
-                print(f"[warning] Failed to load persona {file_path.name}: {err}")
+            except (OSError, ValueError, KeyError) as err:
+                raise EvaiError(
+                    f"Failed to load registered spirit {file_path.name}: {err}"
+                ) from err
 
         self._summaries.sort(key=lambda item: item["name"])
 
@@ -196,31 +222,58 @@ def get_persona_store() -> PersonaStore:
     return _STORE
 
 
-class TrainedModelStore:
+class SpiritAdapterStore:
     def __init__(self) -> None:
-        self._loaded: tuple[str, Any, Any] | None = None
+        self._runtime: Any = None
+        self._sources: dict[str, SpiritPromptSource] = {}
         self._lock = threading.Lock()
 
-    def has_trained_model(self, persona_id: str) -> bool:
-        return (MERGED_DIR / persona_id / "model.safetensors").exists()
+    def has_adapter(self, persona_id: str) -> bool:
+        return (spirit_adapter_dir(persona_id) / "adapter_config.json").exists() and (
+            spirit_file_path(persona_id).exists()
+        )
 
-    def get(self, persona_id: str) -> tuple[Any, Any] | None:
-        if not self.has_trained_model(persona_id):
-            return None
+    def reply(
+        self,
+        persona_id: str,
+        user_message: str,
+        love_level: int,
+        previous_spirit_text: str | None,
+        history: list[dict[str, str]] | None = None,
+    ) -> str:
+        if not self.has_adapter(persona_id):
+            raise EvaiError(f"No trained adapter available for registered spirit '{persona_id}'")
+        from adapter.spirit_adapter import SpiritRuntime
+
         with self._lock:
-            if self._loaded is None or self._loaded[0] != persona_id:
-                model, tokenizer = load_model_and_tokenizer(
-                    MERGED_DIR / persona_id, select_torch_device()
-                )
-                self._loaded = (persona_id, model, tokenizer)
-            return self._loaded[1], self._loaded[2]
+            source = self._sources.get(persona_id)
+            if source is None:
+                source = load_spirit_prompt_source(persona_id)
+                self._sources[persona_id] = source
+            if self._runtime is None:
+                self._runtime = SpiritRuntime([persona_id])
+            messages = build_chat_messages(
+                source, user_message, love_level, previous_spirit_text,
+                conversation_history=history,
+            )
+            return self._runtime.reply(persona_id, messages)
 
 
-_MODEL_STORE = TrainedModelStore()
+_ADAPTER_STORE = SpiritAdapterStore()
 
 
-def get_model_store() -> TrainedModelStore:
-    return _MODEL_STORE
+def get_adapter_store() -> SpiritAdapterStore:
+    return _ADAPTER_STORE
+
+
+def previous_spirit_message(history: list[dict[str, Any]], persona_name: str) -> str | None:
+    for turn in reversed(history[:-1] if history else []):
+        if turn.get("role") == "assistant" and turn.get("sender") in (None, persona_name):
+            content = str(turn.get("content", "")).strip()
+            return content or None
+        if turn.get("role") == "user":
+            return None
+    return None
 
 
 def rule_based_reply(persona: PersonaData, user_message: str) -> str:
@@ -284,12 +337,24 @@ def generate_persona_reply(
     persona_id: str,
     user_message: str,
     history: list[dict[str, Any]] | None = None,
+    love_level: int = MIN_LOVE_LEVEL,
 ) -> str:
-    loaded = get_model_store().get(persona_id)
-    if loaded is not None:
-        model, tokenizer = loaded
-        return generate_reply(model, tokenizer, user_message)
-    return rule_based_reply(persona, user_message)
+    turns: list[dict[str, str]] = []
+    for turn in (history or [])[:-1]:
+        role = turn.get("role")
+        if role == "user" or (
+            role == "assistant" and turn.get("sender") in (None, persona.name)
+        ):
+            turns.append({"role": role, "content": str(turn["content"])})
+        elif role == "assistant":
+            turns.clear()
+    return get_adapter_store().reply(
+        persona_id,
+        user_message,
+        love_level,
+        previous_spirit_message(history or [], persona.name),
+        turns,
+    )
 
 
 class EVAIWebChatHandler(BaseHTTPRequestHandler):
@@ -436,6 +501,14 @@ class EVAIWebChatHandler(BaseHTTPRequestHandler):
             persona_id = req_data.get("persona_id")
             user_message = req_data.get("message", "").strip()
             history = req_data.get("history", [])
+            try:
+                love_level = int(req_data.get("love_level", MIN_LOVE_LEVEL))
+            except (TypeError, ValueError):
+                self._send_error("'love_level' must be an integer")
+                return
+            if not MIN_LOVE_LEVEL <= love_level <= MAX_LOVE_LEVEL:
+                self._send_error(f"'love_level' must be {MIN_LOVE_LEVEL}..{MAX_LOVE_LEVEL}")
+                return
 
             if not persona_id:
                 self._send_error("Missing 'persona_id' in JSON body")
@@ -450,7 +523,13 @@ class EVAIWebChatHandler(BaseHTTPRequestHandler):
                 self._send_error(f"Persona not found: '{persona_id}'", status=HTTPStatus.NOT_FOUND)
                 return
 
-            reply = generate_persona_reply(persona, persona_id, user_message, history)
+            try:
+                reply = generate_persona_reply(
+                    persona, persona_id, user_message, history, love_level
+                )
+            except EvaiError as err:
+                self._send_error(str(err), status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
             self._send_json(
                 {
                     "persona_id": persona_id,

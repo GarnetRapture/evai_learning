@@ -630,6 +630,27 @@
       box-shadow: 0 0 0 2px var(--bg-accent-soft);
     }
 
+    .love-level-field {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      color: var(--text-secondary);
+      font-size: 11px;
+    }
+
+    .love-level-input {
+      width: 52px;
+      background: transparent;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 13px;
+      text-align: center;
+      padding: 4px 2px;
+    }
+
     .chat-textarea {
       flex: 1;
       background: transparent;
@@ -1142,6 +1163,18 @@
         </div>
 
         <form class="input-form-container" id="chatInputForm">
+          <label class="love-level-field" for="loveLevelInput" title="인연 레벨 (1~40)">
+            인연
+            <input
+              id="loveLevelInput"
+              class="love-level-input"
+              type="number"
+              min="1"
+              max="40"
+              step="1"
+              value="1"
+            />
+          </label>
           <textarea
             id="chatInputText"
             class="chat-textarea"
@@ -1371,6 +1404,7 @@
         speechChipsContainer: document.getElementById("speechChipsContainer"),
         chatInputForm: document.getElementById("chatInputForm"),
         chatInputText: document.getElementById("chatInputText"),
+        loveLevelInput: document.getElementById("loveLevelInput"),
         btnSendMessage: document.getElementById("btnSendMessage"),
         btnLoadEvertalk: document.getElementById("btnLoadEvertalk"),
         btnClearChat: document.getElementById("btnClearChat"),
@@ -1502,6 +1536,13 @@
         }
       }
 
+      function currentLoveLevel() {
+        const parsed = Number.parseInt(els.loveLevelInput.value, 10);
+        const level = Number.isNaN(parsed) ? 1 : Math.min(40, Math.max(1, parsed));
+        els.loveLevelInput.value = String(level);
+        return level;
+      }
+
       async function sendChatApi(personaId, message) {
         if (!state.isServerConnected) {
           // Simulated local response from current speech patterns
@@ -1522,6 +1563,7 @@
           body: JSON.stringify({
             persona_id: personaId,
             message: message,
+            love_level: currentLoveLevel(),
             history: state.chatHistory.slice(-10)
           })
         });

@@ -32,5 +32,12 @@ def read_split_conversations(path: Path) -> list[list[dict[str, str]]]:
         for line in handle:
             record = json.loads(line)
             turns = [*record["prompt"], *record["completion"]]
-            conversations.append([{"role": t["role"], "content": t["content"]} for t in turns])
+            conversations.append(message_list(turns))
     return conversations
+
+
+def message_list(turns: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {"role": str(turn["role"]), "content": str(turn["content"])}
+        for turn in turns
+    ]

@@ -46,7 +46,7 @@ def build_dataset_manifest(
     persona_name: str,
     source_json_path: Path,
     dataset_version: str,
-    split: "DatasetSplit[Any]",
+    split: DatasetSplit[Any],
 ) -> DatasetManifest:
     return DatasetManifest(
         persona_id=persona_id,

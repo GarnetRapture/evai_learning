@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "GarnetRapture_evai"
 version = "0.1.0"
-description = "EVAI persona fine-tuning pipeline: full-parameter training of LiquidAI/LFM2.5-230M-Base into a character-identity spirit model"
+description = "EVAI spirit identity training: Korean first, then English and Chinese; one LiquidAI/LFM2.5-230M-Base backbone with independent LoRA adapters"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 authors = [
     { email = "master@n9k32.com" }
 ]
@@ -34,10 +34,12 @@ include = [
     "common",
     "evaluation",
     "export",
+    "game_data",
     "inference",
     "inspection",
     "persona",
     "sft_dataset",
+    "spirit_dataset",
     "training",
     "web",
 ]
@@ -54,7 +56,7 @@ addopts = "-ra"
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -73,5 +75,5 @@ ignore = []
 include = ["src", "tests"]
 extraPaths = ["src"]
 exclude = ["**/__pycache__", "models", "artifacts", "tmp-codex"]
-pythonVersion = "3.12"
+pythonVersion = "3.14"
 typeCheckingMode = "basic"

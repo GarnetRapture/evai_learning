@@ -6,10 +6,10 @@ import torch
 
 @dataclass(frozen=True)
 class GenerationSettings:
-    max_new_tokens: int = 128
+    max_new_tokens: int = 256
     do_sample: bool = False
-    repetition_penalty: float = 1.3
-    no_repeat_ngram_size: int = 3
+    repetition_penalty: float = 1.1
+    no_repeat_ngram_size: int = 0
 
 
 DEFAULT_GENERATION_SETTINGS = GenerationSettings()
@@ -21,8 +21,19 @@ def generate_reply(
     user_message: str,
     settings: GenerationSettings = DEFAULT_GENERATION_SETTINGS,
 ) -> str:
+    return generate_from_messages(
+        model, tokenizer, [{"role": "user", "content": user_message}], settings
+    )
+
+
+def generate_from_messages(
+    model: Any,
+    tokenizer: Any,
+    messages: list[dict[str, str]],
+    settings: GenerationSettings = DEFAULT_GENERATION_SETTINGS,
+) -> str:
     inputs = tokenizer.apply_chat_template(
-        [{"role": "user", "content": user_message}],
+        messages,
         add_generation_prompt=True,
         return_tensors="pt",
         return_dict=True,
@@ -37,3 +48,4 @@ def generate_reply(
         )
     new_tokens = output_ids[0][inputs["input_ids"].shape[1] :]
     return tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+

@@ -160,8 +160,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     try:
         t_cfg = load_training_config(training_cfg_path)
         print(
-            f"  * training.yaml: OK (mode={t_cfg.training_mode}, "
-            f"dtype={t_cfg.precision.dtype}, lr={t_cfg.optimizer.learning_rate}, "
+            f"  * training.yaml: OK (mode=lora_sft, "
+            f"dtype={t_cfg.training.base_dtype}, lr={t_cfg.optimizer.learning_rate}, "
             f"epochs={t_cfg.training.epochs})"
         )
     except EvaiError as err:

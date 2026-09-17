@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from game_data.database import open_tbl_database
 from game_data.localization import StringResolver
 
+MAIN_STORY_TYPE = 1
+BOND_STORY_TYPES: frozenset[int] = frozenset({2, 10})
 
 @dataclass(frozen=True)
 class StoryEpisode:
@@ -40,11 +42,21 @@ class StoryRepository:
         connection: sqlite3.Connection | None = None,
     ) -> None:
         self._resolver = resolver
+        self._owns_connection = connection is None
         self._connection = connection if connection is not None else open_tbl_database("story")
-        self._actor_names: dict[int, str | None] = {
-            row["No"]: resolver.resolve_kr("StringCharacter", row["NameSno"])
-            for row in self._connection.execute("SELECT No, NameSno FROM TalkActor")
-        }
+        self._line_cache: dict[int, list[StoryLine]] = {}
+        try:
+            self._actor_names: dict[int, str | None] = {
+                row["No"]: resolver.resolve_kr("StringCharacter", row["NameSno"])
+                for row in self._connection.execute("SELECT No, NameSno FROM TalkActor")
+            }
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        if self._owns_connection:
+            self._connection.close()
 
     def speaker_name(self, speaker_no: int) -> str | None:
         return self._actor_names.get(speaker_no)
@@ -72,12 +84,33 @@ class StoryRepository:
         ]
 
     def lines(self, group_no: int) -> list[StoryLine]:
+        if group_no in self._line_cache:
+            return self._line_cache[group_no]
         rows = self._connection.execute(
             "SELECT No, GroupNo, TalkIndex, TalkType, UiType, SpeakerNo, ChoiceGroup, "
             "LoveLevel, HeroNo, Hide FROM Talk WHERE GroupNo = ? AND Hide = 0 "
             "ORDER BY TalkIndex, No",
             (group_no,),
         ).fetchall()
+        lines = self._decode_lines(rows)
+        self._line_cache[group_no] = lines
+        return lines
+
+    def episode_lines(self, story_types: tuple[int, ...]) -> dict[int, list[StoryLine]]:
+        placeholders = ",".join("?" for _ in story_types)
+        rows = self._connection.execute(
+            "SELECT No, GroupNo, TalkIndex, TalkType, UiType, SpeakerNo, ChoiceGroup, "
+            "LoveLevel, HeroNo FROM Talk WHERE Hide = 0 AND GroupNo IN "
+            f"(SELECT TalkGroup FROM StoryInfo WHERE StoryType IN ({placeholders})) "
+            "ORDER BY GroupNo, TalkIndex, No", story_types,
+        ).fetchall()
+        groups: dict[int, list[StoryLine]] = {}
+        for line in self._decode_lines(rows):
+            groups.setdefault(line.group_no, []).append(line)
+        self._line_cache.update(groups)
+        return groups
+
+    def _decode_lines(self, rows: list[sqlite3.Row]) -> list[StoryLine]:
         return [
             StoryLine(
                 talk_no=row["No"],

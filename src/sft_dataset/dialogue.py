@@ -25,6 +25,7 @@ class TurnClassification(StrEnum):
     EXCLUDED_NONCONSENSUAL_OR_EXPLOITATIVE = "excluded_nonconsensual_or_exploitative"
     EXCLUDED_REAL_PERSON_SEXUALIZATION = "excluded_real_person_sexualization"
     NEEDS_REVIEW = "needs_review"
+    EXCLUDED_UNANSWERED_CONTEXT = "excluded_unanswered_context"
 
 
 @dataclass(frozen=True)
@@ -155,6 +156,7 @@ class DialogueExtractionResult:
 
 
 CLASSIFICATION_PRIORITY: tuple[TurnClassification, ...] = (
+    TurnClassification.EXCLUDED_UNANSWERED_CONTEXT,
     TurnClassification.EXCLUDED_MINOR_OR_AGE_AMBIGUOUS,
     TurnClassification.EXCLUDED_NONCONSENSUAL_OR_EXPLOITATIVE,
     TurnClassification.EXCLUDED_REAL_PERSON_SEXUALIZATION,
@@ -229,6 +231,17 @@ def build_channel_exchanges(
         )
         pending_prompt = []
 
+    if pending_prompt:
+        exchanges.append(
+            DialogueExchange(
+                exchange_id=f"{source_type}:{len(exchanges)}",
+                source_type=source_type,
+                source_index=len(exchanges),
+                prompt=pending_prompt,
+                completion=[],
+                classification=TurnClassification.EXCLUDED_UNANSWERED_CONTEXT,
+            )
+        )
     return exchanges
 
 

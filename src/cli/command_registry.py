@@ -14,7 +14,7 @@ def add_command(
 
 
 def add_persona_id_argument(command_parser: argparse.ArgumentParser) -> None:
-    command_parser.add_argument("persona_id", help="Persona id (data JSON filename stem)")
+    command_parser.add_argument("persona_id", help="Registered spirit slug")
 
 
 def print_banner(title: str, width: int = 70) -> None:
