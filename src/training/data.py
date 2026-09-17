@@ -1,26 +1,14 @@
 """Load, tokenize and batch the canonical multilingual curriculum."""
 
-import hashlib
-import json
-import random
 from typing import Any
 
 import torch
 
 from common.errors import EvaiError
-from sft_dataset.storage import message_list, sft_split_path
+from sft_dataset.storage import message_list
 from spirit_dataset.records import TrainingTask
 from spirit_dataset.runtime_prompt import bind_spirit_identity
-from training.records import IGNORE_INDEX, SHUFFLE_POOL_BATCHES, TokenizedExample
-
-
-def read_split_records(slug: str, split: str) -> tuple[list[dict[str, Any]], str | None]:
-    path = sft_split_path(slug, split)
-    if not path.exists():
-        return [], None
-    raw = path.read_bytes()
-    records = [json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()]
-    return records, hashlib.sha256(raw).hexdigest()
+from training.records import IGNORE_INDEX, EncodedRecord, TokenizedExample, TrainingBatch
 
 
 def template_ids(
@@ -69,40 +57,35 @@ def tokenize_records(
     return examples, over_length
 
 
-def length_grouped_batches(
-    examples: list[TokenizedExample], batch_size: int, rng: random.Random | None
-) -> list[list[TokenizedExample]]:
-    ordered = list(examples)
-    if rng is not None:
-        rng.shuffle(ordered)
-    pool_size = batch_size * SHUFFLE_POOL_BATCHES
-    batches: list[list[TokenizedExample]] = []
-    for start in range(0, len(ordered), pool_size):
-        pool = sorted(ordered[start : start + pool_size], key=lambda item: len(item.input_ids))
-        batches.extend(pool[i : i + batch_size] for i in range(0, len(pool), batch_size))
-    if rng is not None:
-        rng.shuffle(batches)
-    return batches
-
-
 def collate(
-    batch: list[TokenizedExample], pad_token_id: int, device: str
-) -> dict[str, torch.Tensor]:
-    width = max(len(item.input_ids) for item in batch)
-    input_ids = torch.full((len(batch), width), pad_token_id, dtype=torch.long)
-    labels = torch.full((len(batch), width), IGNORE_INDEX, dtype=torch.long)
-    attention_mask = torch.zeros((len(batch), width), dtype=torch.long)
+    batch: list[EncodedRecord], token_ids: torch.Tensor, pad_token_id: int
+) -> TrainingBatch:
+    """Prepare pinned CPU tensors and causal target positions before GPU submission."""
+    width = max(item.token_count for item in batch)
+    shape = (len(batch), width)
+    target_count = sum(item.token_count - item.prompt_tokens for item in batch)
+    input_ids = torch.full(shape, pad_token_id, dtype=torch.long, pin_memory=True)
+    attention_mask = torch.zeros(shape, dtype=torch.long, pin_memory=True)
+    target_positions = torch.empty(target_count, dtype=torch.long, pin_memory=True)
+    target_ids = torch.empty(target_count, dtype=torch.long, pin_memory=True)
+    target_offset = 0
     for row, item in enumerate(batch):
-        length = len(item.input_ids)
-        input_ids[row, :length] = torch.tensor(item.input_ids, dtype=torch.long)
-        labels[row, :length] = torch.tensor(item.labels, dtype=torch.long)
-        attention_mask[row, :length] = 1
-    return {
-        "input_ids": input_ids.to(device),
-        "labels": labels.to(device),
-        "attention_mask": attention_mask.to(device),
-    }
+        tokens = token_ids.narrow(0, item.token_offset, item.token_count)
+        input_ids[row, : item.token_count] = tokens
+        attention_mask[row, : item.token_count] = 1
+        count = item.token_count - item.prompt_tokens
+        target_ids[target_offset : target_offset + count] = tokens[item.prompt_tokens :]
+        target_positions[target_offset : target_offset + count] = torch.arange(
+            row * width + item.prompt_tokens - 1, row * width + item.token_count - 1
+        )
+        target_offset += count
+    return TrainingBatch(input_ids, attention_mask, target_positions, target_ids)
 
 
-def supervised_token_count(batch: dict[str, torch.Tensor]) -> int:
-    return int((batch["labels"][:, 1:] != IGNORE_INDEX).sum().item())
+def move_batch(batch: TrainingBatch, device: str) -> TrainingBatch:
+    return TrainingBatch(
+        batch.input_ids.to(device, non_blocking=True),
+        batch.attention_mask.to(device, non_blocking=True),
+        batch.target_positions.to(device, non_blocking=True),
+        batch.target_ids.to(device, non_blocking=True),
+    )

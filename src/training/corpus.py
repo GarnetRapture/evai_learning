@@ -1,13 +1,15 @@
-"""A small byte-offset index streams the mixed roster without token caches on disk."""
+"""Tokenize once into bounded int32 CPU storage; never cache tokens on disk."""
 
 import hashlib
 import json
 import random
+from array import array
 from collections import Counter
 from collections.abc import Iterator
-from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any
+
+import torch
 
 from common.errors import EvaiError
 from common.hashing import compute_file_sha256
@@ -17,26 +19,29 @@ from sft_dataset.storage import sft_split_path
 from spirit_dataset.curriculum import SpiritGrade, required_tasks
 from spirit_dataset.runtime_prompt import spirit_file_path
 from training.data import tokenize_records
-from training.records import IGNORE_INDEX, SHUFFLE_POOL_BATCHES, RecordLocation, TokenizedExample
+from training.records import IGNORE_INDEX, SHUFFLE_POOL_BATCHES, EncodedRecord
 
 SPLITS = ("train", "validation", "test")
 
 
 @dataclass
 class TrainingCorpus:
-    splits: dict[str, list[RecordLocation]]
+    splits: dict[str, list[EncodedRecord]]
     provenance: dict[str, Any]
     excluded: dict[str, int]
     partition_moves: dict[str, int]
-    tokenizer: Any
+    token_ids: torch.Tensor
     max_length: int
 
     @classmethod
-    def prepare(cls, slugs: list[str], tokenizer: Any, max_length: int) -> TrainingCorpus:
-        splits: dict[str, list[RecordLocation]] = {split: [] for split in SPLITS}
+    def prepare(
+        cls, slugs: list[str], tokenizer: Any, max_length: int, token_memory_limit_bytes: int
+    ) -> TrainingCorpus:
+        splits: dict[str, list[EncodedRecord]] = {split: [] for split in SPLITS}
+        token_storage = array("i")
         provenance: dict[str, Any] = {}
         excluded: Counter[str] = Counter()
-        locations: list[tuple[str, RecordLocation]] = []
+        locations: list[tuple[str, EncodedRecord]] = []
         keys_by_record: list[tuple[str, ...]] = []
         for number, slug in enumerate(slugs, 1):
             profile_path = spirit_file_path(slug)
@@ -57,7 +62,6 @@ class TrainingCorpus:
                 before = len(splits[split])
                 with path.open("rb") as handle:
                     while True:
-                        offset = handle.tell()
                         line = handle.readline()
                         if not line:
                             break
@@ -76,9 +80,21 @@ class TrainingCorpus:
                             raise EvaiError(
                                 f"Record has no supervised response: {example.record_id}"
                             )
-                        location = RecordLocation(
-                            path, offset, slug, len(example.input_ids), targets
+                        required_bytes = (
+                            len(token_storage) + len(example.input_ids)
+                        ) * token_storage.itemsize
+                        if required_bytes > token_memory_limit_bytes:
+                            raise EvaiError(
+                                "Encoded corpus exceeds the configured CPU token memory limit: "
+                                f"{required_bytes} > {token_memory_limit_bytes} bytes"
+                            )
+                        location = EncodedRecord(
+                            slug,
+                            len(token_storage),
+                            len(example.input_ids),
+                            len(example.input_ids) - targets,
                         )
+                        token_storage.extend(example.input_ids)
                         splits[split].append(location)
                         locations.append((split, location))
                         keys = list(record.get("event_keys", ()))
@@ -120,11 +136,16 @@ class TrainingCorpus:
                 for split, records in splits.items()
             }
         print(f"Joint event partitions: {dict(moves)}", flush=True)
-        return cls(splits, provenance, dict(excluded), dict(moves), tokenizer, max_length)
+        token_ids = torch.frombuffer(token_storage, dtype=torch.int32)
+        print(
+            f"CPU token storage: {token_ids.numel() * token_ids.element_size():,} bytes",
+            flush=True,
+        )
+        return cls(splits, provenance, dict(excluded), dict(moves), token_ids, max_length)
 
     def batches(
         self, split: str, batch_size: int, rng: random.Random | None = None
-    ) -> Iterator[list[TokenizedExample]]:
+    ) -> Iterator[list[EncodedRecord]]:
         ordered = list(self.splits[split])
         if rng is not None:
             rng.shuffle(ordered)
@@ -134,24 +155,4 @@ class TrainingCorpus:
             batches = [pool[i : i + batch_size] for i in range(0, len(pool), batch_size)]
             if rng is not None:
                 rng.shuffle(batches)
-            for batch in batches:
-                examples = []
-                with ExitStack() as stack:
-                    handles = {
-                        path: stack.enter_context(path.open("rb"))
-                        for path in {item.path for item in batch}
-                    }
-                    for location in batch:
-                        handle = handles[location.path]
-                        handle.seek(location.offset)
-                        record = json.loads(handle.readline())
-                        items, rejected = tokenize_records(
-                            self.tokenizer,
-                            [record],
-                            self.max_length,
-                            spirit_id=location.spirit_id,
-                        )
-                        if rejected or len(items[0].input_ids) != location.token_count:
-                            raise EvaiError(f"Dataset changed during training: {location.path}")
-                        examples.append(items[0])
-                yield examples
+            yield from batches

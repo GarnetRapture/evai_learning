@@ -54,7 +54,7 @@ def short_conv_forward(
                 conv_kernel_size=self.conv_kernel_size,
             )
         convolved = F.conv1d(
-            gated.to(self.conv.weight.dtype),
+            gated,
             self.conv.weight,
             self.conv.bias,
             padding=self.conv_kernel_size - 1,

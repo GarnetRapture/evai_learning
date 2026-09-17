@@ -4,21 +4,20 @@ from typing import Any
 
 import torch
 
-from training.records import IGNORE_INDEX
+from training.records import TrainingBatch
 
 
 def completion_token_loss(
-    model: Any, batch: dict[str, torch.Tensor]
-) -> tuple[torch.Tensor, torch.Tensor]:
+    model: Any, batch: TrainingBatch
+) -> torch.Tensor:
     hidden = model.model(
-        input_ids=batch["input_ids"], attention_mask=batch["attention_mask"], use_cache=False
+        input_ids=batch.input_ids, attention_mask=batch.attention_mask, use_cache=False
     ).last_hidden_state
-    shifted_labels = batch["labels"][:, 1:]
-    supervised = shifted_labels != IGNORE_INDEX
-    logits = model.lm_head(hidden[:, :-1][supervised]).float()
+    selected = hidden.flatten(0, 1).index_select(0, batch.target_positions)
+    logits = model.lm_head(selected).float()
     loss_sum = torch.nn.functional.cross_entropy(
         logits,
-        shifted_labels[supervised],
+        batch.target_ids,
         reduction="sum",
     )
-    return loss_sum, supervised.sum()
+    return loss_sum

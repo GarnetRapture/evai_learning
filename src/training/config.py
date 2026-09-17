@@ -26,6 +26,7 @@ class TrainingSettings:
     epochs: int
     seed: int
     base_dtype: str
+    token_memory_limit_mib: int
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,8 @@ def load_training_config(config_path: Path | None = None) -> TrainingConfig:
         raise ConfigurationError("Invalid batch size or epoch count", path)
     if not 0 < training.max_length <= CONTEXT_LENGTH:
         raise ConfigurationError("Training length exceeds the fixed context", path)
+    if training.token_memory_limit_mib <= 0:
+        raise ConfigurationError("Token storage requires a positive CPU memory limit", path)
     if not 0 <= optimizer.warmup_ratio <= 1 or optimizer.learning_rate <= 0:
         raise ConfigurationError("Invalid optimizer schedule", path)
     if optimizer.max_grad_norm <= 0 or optimizer.weight_decay < 0:

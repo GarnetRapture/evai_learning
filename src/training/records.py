@@ -1,10 +1,14 @@
 """Shared training records; no model allocation or I/O."""
 
+from __future__ import annotations
+
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from spirit_dataset.records import TrainingTask
+
+if TYPE_CHECKING:
+    import torch
 
 IGNORE_INDEX = -100
 SHUFFLE_POOL_BATCHES = 16
@@ -22,19 +26,39 @@ class TokenizedExample:
 
 
 @dataclass(frozen=True)
-class RecordLocation:
-    path: Path
-    offset: int
+class EncodedRecord:
     spirit_id: str
+    token_offset: int
     token_count: int
-    target_tokens: int
+    prompt_tokens: int
+
+
+@dataclass(frozen=True)
+class TrainingBatch:
+    input_ids: torch.Tensor
+    attention_mask: torch.Tensor
+    target_positions: torch.Tensor
+    target_ids: torch.Tensor
+
+    @property
+    def target_count(self) -> int:
+        return self.target_ids.numel()
+
+
+@dataclass(frozen=True)
+class TrainingStep:
+    micro_batches: tuple[TrainingBatch, ...]
+
+    @property
+    def target_count(self) -> int:
+        return sum(batch.target_count for batch in self.micro_batches)
 
 
 @dataclass(frozen=True)
 class EpochResult:
     epoch: int
     train_loss: float
-    validation_loss: float | None
+    validation_loss: float
 
 
 @dataclass(frozen=True)
@@ -62,7 +86,11 @@ class TrainingReport:
     optimizer_steps: int = 0
     test_loss: float | None = None
     seconds: float = 0.0
-    peak_memory_gib: float = 0.0
+    pytorch_peak_allocated_gib: float = 0.0
+    token_storage_bytes: int = 0
+    preparation_seconds: float = 0.0
+    data_wait_seconds: float = 0.0
+    train_micro_batches: int = 0
     quality_approved: bool = False
 
     def to_dict(self) -> dict[str, Any]:
