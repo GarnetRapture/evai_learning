@@ -6,6 +6,8 @@ from game_data.database import open_tbl_database
 from game_data.localization import StringResolver
 from game_data.references import StringTableReferences
 from game_data.story import BOND_STORY_TYPES, MAIN_STORY_TYPE, StoryLine, StoryRepository
+from spirit_dataset.events import EventIndex
+from spirit_dataset.language import render
 from spirit_dataset.memory import ALTERNATE_ENDING_AFFINITIES
 from spirit_dataset.profile import SpiritProfile
 from spirit_dataset.records import ExclusionReason, SourceKind, SourceReference
@@ -82,13 +84,16 @@ class SpiritSourceReader:
             self._load_sources(resolver, resources)
         story_types = (MAIN_STORY_TYPE, *sorted(BOND_STORY_TYPES))
         self._episodes = [
-            episode for story_type in story_types for episode in self._story.episodes(story_type)
+            episode
+            for story_type in story_types
+            for episode in self._story.episodes(story_type)
             if episode.ending_affinity not in ALTERNATE_ENDING_AFFINITIES
         ]
         self._episode_lines = {
             group: self._script_lines(lines)
             for group, lines in self._story.episode_lines(story_types).items()
         }
+        self.events = EventIndex(self._episodes)
         self._speaker_groups: dict[int, set[int]] = defaultdict(set)
         self._speaker_name_groups: dict[str, set[int]] = defaultdict(set)
         for group_no, lines in self._episode_lines.items():
@@ -106,7 +111,8 @@ class SpiritSourceReader:
         ):
             self._evertalk_episodes[row["HeroNo"]].append((row["GroupNo"], row["LoveLevel"]))
         self._evertalk_levels = {
-            group_no: love_level for episodes in self._evertalk_episodes.values()
+            group_no: love_level
+            for episodes in self._evertalk_episodes.values()
             for group_no, love_level in episodes
         }
         self._evertalk_lines: dict[int, list[ScriptLine]] = defaultdict(list)
@@ -122,7 +128,7 @@ class SpiritSourceReader:
                     choice_group=row["ChoiceGroup"],
                     speaker_no=row["SpeakerNo"],
                     speaker_name=self._story.speaker_name(row["SpeakerNo"]),
-                    text=clean_game_text(resolver.resolve_kr("StringEverTalk", row["No"])),
+                    text=clean_game_text(resolver.resolve_current("StringEverTalk", row["No"])),
                 )
             )
         lobby = resources.enter_context(closing(open_tbl_database("lobby")))
@@ -140,7 +146,7 @@ class SpiritSourceReader:
         self._trip_keywords: dict[int, tuple[int, str]] = {}
         for row in trip.execute("SELECT No, HeroNo, KeywordString FROM TripKeyword"):
             keyword = clean_game_text(
-                resolver.resolve_kr(TRIP_KEYWORD_STRING_TABLE, row["KeywordString"])
+                resolver.resolve_current(TRIP_KEYWORD_STRING_TABLE, row["KeywordString"])
             )
             if keyword:
                 self._trip_keywords[row["No"]] = (row["HeroNo"], keyword)
@@ -157,6 +163,9 @@ class SpiritSourceReader:
             lambda line: line.speaker_no == identity.hero_no or line.speaker_name == identity.name,
             layout,
         )
+
+    def _context(self, template: str, **values: object) -> str:
+        return render(template, self._resolver.language, **values)
 
     def _story_lines(self, group_no: int) -> list[ScriptLine]:
         return self._script_lines(self._story.lines(group_no))
@@ -192,30 +201,55 @@ class SpiritSourceReader:
             lines = self._episode_lines[episode.talk_group]
             group_skips: list[SourceSkip] = []
             parsed = self._parse_group(
-                walker, lines, SourceKind.STORY, "Talk", episode.talk_group, group_skips,
+                walker,
+                lines,
+                SourceKind.STORY,
+                "Talk",
+                episode.talk_group,
+                group_skips,
             )
             situation = clean_game_text(episode.title)
             contextualized = []
             for exchange in parsed:
                 if not exchange.user_items and not situation:
-                    group_skips.append(SourceSkip(
-                        SourceReference(SourceKind.STORY, "Talk", (
-                            episode.talk_group, *exchange.keys,
-                        )), ExclusionReason.UNVERIFIED_TRIGGER,
-                        "Story opening has no resolved situation", exchange.spirit_text,
-                    ))
+                    group_skips.append(
+                        SourceSkip(
+                            SourceReference(
+                                SourceKind.STORY,
+                                "Talk",
+                                (
+                                    episode.talk_group,
+                                    *exchange.keys,
+                                ),
+                            ),
+                            ExclusionReason.UNVERIFIED_TRIGGER,
+                            "Story opening has no resolved situation",
+                            exchange.spirit_text,
+                        )
+                    )
                 else:
                     contextualized.append(exchange)
             for exchange in self._from_script(
-                contextualized, SourceKind.STORY, "Talk", episode.talk_group,
-                situation, self._evertalk_levels.get(episode.messenger_group),
+                contextualized,
+                SourceKind.STORY,
+                "Talk",
+                episode.talk_group,
+                situation,
+                self._evertalk_levels.get(episode.messenger_group),
             ):
-                exchanges.append(replace(
-                    exchange, source=replace(exchange.source, story_no=episode.story_no),
-                ))
-            skips.extend(replace(
-                skip, source=replace(skip.source, story_no=episode.story_no),
-            ) for skip in group_skips)
+                exchanges.append(
+                    replace(
+                        exchange,
+                        source=replace(exchange.source, story_no=episode.story_no),
+                    )
+                )
+            skips.extend(
+                replace(
+                    skip,
+                    source=replace(skip.source, story_no=episode.story_no),
+                )
+                for skip in group_skips
+            )
         return exchanges
 
     @staticmethod
@@ -251,11 +285,16 @@ class SpiritSourceReader:
     ) -> list[ScriptExchange]:
         parsed = walker.parse(lines)
         for line in parsed.unconverted:
-            skips.append(SourceSkip(
-                SourceReference(kind, table, (group_no, line.key)),
-                ExclusionReason.EMPTY_TEXT if not line.text else ExclusionReason.UNVERIFIED_TRIGGER,
-                f"Unconverted source UI type: {line.ui_type}", line.text,
-            ))
+            skips.append(
+                SourceSkip(
+                    SourceReference(kind, table, (group_no, line.key)),
+                    ExclusionReason.EMPTY_TEXT
+                    if not line.text
+                    else ExclusionReason.UNVERIFIED_TRIGGER,
+                    f"Unconverted source UI type: {line.ui_type}",
+                    line.text,
+                )
+            )
         for pending in parsed.unanswered:
             skips.append(
                 SourceSkip(
@@ -276,37 +315,43 @@ class SpiritSourceReader:
             exchanges.extend(
                 self._from_script(
                     self._parse_group(
-                        walker, self._evertalk_lines.get(group_no, []), SourceKind.EVERTALK,
-                        "EverTalkDesc", group_no, skips,
+                        walker,
+                        self._evertalk_lines.get(group_no, []),
+                        SourceKind.EVERTALK,
+                        "EverTalkDesc",
+                        group_no,
+                        skips,
                     ),
                     SourceKind.EVERTALK,
                     "EverTalkDesc",
                     group_no,
-                    EVERTALK_OPENING_SITUATION,
+                    self._context(EVERTALK_OPENING_SITUATION),
                     love_level,
                 )
             )
         return exchanges
 
-    def _trip(
-        self, identity: SpiritIdentity, skips: list[SourceSkip]
-    ) -> list[CanonicalExchange]:
+    def _trip(self, identity: SpiritIdentity, skips: list[SourceSkip]) -> list[CanonicalExchange]:
         walker = self._walker(identity, ChoiceLayout.GROUPED_BY_CHOICE_GROUP)
         exchanges: list[CanonicalExchange] = []
         for row in self._trip_rows.get(identity.hero_no, []):
             keyword_entry = self._trip_keywords.get(int(str(row["KeywordNo"])))
             if keyword_entry is None:
-                situation = TRIP_OPENING_SITUATION
+                situation = self._context(TRIP_OPENING_SITUATION)
             elif keyword_entry[0] == identity.hero_no:
-                situation = TRIP_PERSONAL_KEYWORD_SITUATION.format(keyword=keyword_entry[1])
+                situation = self._context(TRIP_PERSONAL_KEYWORD_SITUATION, keyword=keyword_entry[1])
             else:
-                situation = TRIP_SHARED_KEYWORD_SITUATION.format(keyword=keyword_entry[1])
+                situation = self._context(TRIP_SHARED_KEYWORD_SITUATION, keyword=keyword_entry[1])
             group_no = int(str(row["KeywordTalk"]))
             exchanges.extend(
                 self._from_script(
                     self._parse_group(
-                        walker, self._story_lines(group_no), SourceKind.TRIP,
-                        "Talk", group_no, skips,
+                        walker,
+                        self._story_lines(group_no),
+                        SourceKind.TRIP,
+                        "Talk",
+                        group_no,
+                        skips,
                     ),
                     SourceKind.TRIP,
                     "Talk",
@@ -317,22 +362,24 @@ class SpiritSourceReader:
             )
         return exchanges
 
-    def _town(
-        self, identity: SpiritIdentity, skips: list[SourceSkip]
-    ) -> list[CanonicalExchange]:
+    def _town(self, identity: SpiritIdentity, skips: list[SourceSkip]) -> list[CanonicalExchange]:
         walker = self._walker(identity, ChoiceLayout.GROUPED_BY_CHOICE_GROUP)
         exchanges: list[CanonicalExchange] = []
         for group_no in self._town_groups.get(identity.hero_no, []):
             exchanges.extend(
                 self._from_script(
                     self._parse_group(
-                        walker, self._story_lines(group_no), SourceKind.TOWN_LOST_ITEM,
-                        "Talk", group_no, skips,
+                        walker,
+                        self._story_lines(group_no),
+                        SourceKind.TOWN_LOST_ITEM,
+                        "Talk",
+                        group_no,
+                        skips,
                     ),
                     SourceKind.TOWN_LOST_ITEM,
                     "Talk",
                     group_no,
-                    TOWN_LOST_ITEM_OPENING_SITUATION,
+                    self._context(TOWN_LOST_ITEM_OPENING_SITUATION),
                     None,
                 )
             )
@@ -357,9 +404,7 @@ class SpiritSourceReader:
             emotion=emotion,
         )
 
-    def _lobby(
-        self, identity: SpiritIdentity, skips: list[SourceSkip]
-    ) -> list[CanonicalExchange]:
+    def _lobby(self, identity: SpiritIdentity, skips: list[SourceSkip]) -> list[CanonicalExchange]:
         table = self._references.string_table("LobbyAnimation", "TextSno")
         exchanges: list[CanonicalExchange] = []
         for row in self._lobby_rows.get(identity.hero_no, []):
@@ -367,7 +412,7 @@ class SpiritSourceReader:
             source = SourceReference(
                 kind=SourceKind.LOBBY, table="LobbyAnimation", keys=(int(str(row["No"])),)
             )
-            text = clean_game_text(self._resolver.resolve_kr(table, int(str(row["TextSno"]))))
+            text = clean_game_text(self._resolver.resolve_current(table, int(str(row["TextSno"]))))
             if not text:
                 skips.append(SourceSkip(source, ExclusionReason.EMPTY_TEXT, lobby_type, ""))
                 continue
@@ -387,16 +432,14 @@ class SpiritSourceReader:
                     SourceKind.LOBBY,
                     "LobbyAnimation",
                     source.keys,
-                    template.format(month=row["Mm"], day=row["Dd"]),
+                    self._context(template, month=row["Mm"], day=row["Dd"]),
                     text,
                     str(row["Emotion"]) or None,
                 )
             )
         return exchanges
 
-    def _bubble(
-        self, identity: SpiritIdentity, skips: list[SourceSkip]
-    ) -> list[CanonicalExchange]:
+    def _bubble(self, identity: SpiritIdentity, skips: list[SourceSkip]) -> list[CanonicalExchange]:
         row = self._bubbles.get(identity.hero_no)
         if row is None:
             return []
@@ -407,13 +450,19 @@ class SpiritSourceReader:
             source = SourceReference(
                 kind=SourceKind.BUBBLE, table=f"TalkBubble.{column}", keys=(identity.hero_no, value)
             )
-            text = clean_game_text(self._resolver.resolve_kr(BUBBLE_STRING_TABLE, value))
+            text = clean_game_text(self._resolver.resolve_current(BUBBLE_STRING_TABLE, value))
             if text.startswith(f"말풍선_{identity.name}") or text in (
-                f"아르바이트 시작_{identity.name}", f"아르바이트 종료_{identity.name}",
+                f"아르바이트 시작_{identity.name}",
+                f"아르바이트 종료_{identity.name}",
             ):
-                skips.append(SourceSkip(
-                    source, ExclusionReason.UNRESOLVED_STRING, "Localization placeholder", text,
-                ))
+                skips.append(
+                    SourceSkip(
+                        source,
+                        ExclusionReason.UNRESOLVED_STRING,
+                        "Localization placeholder",
+                        text,
+                    )
+                )
                 continue
             if column in BUBBLE_BATTLE_COLUMNS:
                 skips.append(SourceSkip(source, ExclusionReason.GAME_FEATURE_GUIDE, column, text))
@@ -430,7 +479,7 @@ class SpiritSourceReader:
                     SourceKind.BUBBLE,
                     source.table,
                     source.keys,
-                    situation,
+                    self._context(situation),
                     text,
                     BUBBLE_COLUMN_EMOTIONS.get(column),
                 )
@@ -447,7 +496,7 @@ class SpiritSourceReader:
                         SourceKind.HERO_DESC,
                         f"HeroDesc.{field_name}",
                         (profile.identity.hero_no,),
-                        situation,
+                        self._context(situation),
                         text,
                         None,
                     )
@@ -460,7 +509,7 @@ class SpiritSourceReader:
                     SourceKind.HERO_COMMENT,
                     "HeroComment",
                     (comment.comment_no,),
-                    HERO_COMMENT_SITUATION.format(name=comment.about_name),
+                    self._context(HERO_COMMENT_SITUATION, name=comment.about_name),
                     comment.text,
                     None,
                 )

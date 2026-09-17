@@ -62,12 +62,8 @@ def inspect_local_model(model_dir: Path | None = None) -> ModelAssetStatus:
             errors=[f"Model directory does not exist: {target_dir}"],
         )
 
-    weight_files = sorted(
-        [p.name for p in target_dir.glob("*.safetensors") if p.is_file()]
-    )
-    total_weight_bytes = sum(
-        (target_dir / name).stat().st_size for name in weight_files
-    )
+    weight_files = sorted([p.name for p in target_dir.glob("*.safetensors") if p.is_file()])
+    total_weight_bytes = sum((target_dir / name).stat().st_size for name in weight_files)
 
     if not weight_files:
         errors.append("No *.safetensors weight files found in model directory.")

@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from sft_dataset.records import SFTRecordTurn
+from common.messages import SFTRecordTurn
 
 MEMORY_LINE_MAX_LENGTH = 29
 
@@ -13,13 +13,13 @@ class SourceClass(StrEnum):
     CANON_DIALOGUE = "canon_dialogue"
     PROJECT_CONTRACT = "project_contract"
     DERIVED_MEMORY = "derived_memory"
-    TEACHER_REASONING = "teacher_reasoning"
+    DERIVED_BEHAVIOR = "derived_behavior"
 
 
 class TrainingTask(StrEnum):
-    SPEECH = "speech"
+    PERSONA_SPEECH = "persona_speech"
     SELF_MEMORY = "self_memory"
-    SELF_JUDGMENT = "self_judgment"
+    BEHAVIOR_JUDGMENT = "behavior_judgment"
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,7 @@ class SourceKind(StrEnum):
 
 
 class ExclusionReason(StrEnum):
+    TARGET_LEAKAGE = "target_leakage"
     NON_SELF_SPEECH = "non_self_speech"
     CONTENT_CLASSIFICATION = "content_classification"
     GAME_FEATURE_GUIDE = "game_feature_guide"
@@ -78,7 +79,9 @@ class SourceReference:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "kind": self.kind.value, "table": self.table, "keys": list(self.keys),
+            "kind": self.kind.value,
+            "table": self.table,
+            "keys": list(self.keys),
             "source_class": self.source_class.value,
             **({"story_no": self.story_no} if self.story_no is not None else {}),
         }
@@ -97,14 +100,16 @@ class JudgmentTrace:
 
     @property
     def is_complete(self) -> bool:
-        return bool(self.evidence) and all((
-            self.activated_memory,
-            self.interpretation,
-            self.decision,
-            self.emotion,
-            self.intention,
-            self.action,
-        ))
+        return bool(self.evidence) and all(
+            (
+                self.activated_memory,
+                self.interpretation,
+                self.decision,
+                self.emotion,
+                self.intention,
+                self.action,
+            )
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -119,8 +124,9 @@ class JudgmentTrace:
             "action": self.action,
             "evidence": list(self.evidence),
             "complete": self.is_complete,
-            "source_class": SourceClass.TEACHER_REASONING.value if self.is_complete else None,
+            "source_class": SourceClass.DERIVED_BEHAVIOR.value if self.is_complete else None,
         }
+
 
 @dataclass(frozen=True)
 class SpiritTrainingRecord:
@@ -132,14 +138,18 @@ class SpiritTrainingRecord:
     completion: list[SFTRecordTurn]
     source_class: SourceClass = SourceClass.CANON_DIALOGUE
     evidence: tuple[MemoryEvidence, ...] = ()
-    task: TrainingTask = TrainingTask.SPEECH
+    task: TrainingTask = TrainingTask.PERSONA_SPEECH
     origin_id: str | None = None
+    event_keys: tuple[str, ...] = ()
+    language: str = "ko"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "task": self.task.value,
             "origin_id": self.origin_id or self.id,
+            "event_keys": list(self.event_keys),
+            "language": self.language,
             "source_class": self.source_class.value,
             "source": self.source.to_dict(),
             "love_level": self.love_level,

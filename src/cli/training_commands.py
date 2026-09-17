@@ -26,7 +26,9 @@ def cmd_train(args: argparse.Namespace) -> int:
 def cmd_train_spirit(args: argparse.Namespace) -> int:
     from common.errors import EvaiError
     from common.paths import spirit_training_report_path
-    from training.spirit_lora import SpiritLoraTrainer, load_spirit_lora_config, roster_slugs
+    from training.config import load_spirit_lora_config
+    from training.data import roster_slugs
+    from training.spirit_lora import SpiritLoraTrainer
 
     known = roster_slugs()
     slugs: list[str] = list(dict.fromkeys(args.spirit)) if args.spirit else known

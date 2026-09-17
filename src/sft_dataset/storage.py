@@ -37,7 +37,4 @@ def read_split_conversations(path: Path) -> list[list[dict[str, str]]]:
 
 
 def message_list(turns: list[dict[str, Any]]) -> list[dict[str, str]]:
-    return [
-        {"role": str(turn["role"]), "content": str(turn["content"])}
-        for turn in turns
-    ]
+    return [{"role": str(turn["role"]), "content": str(turn["content"])} for turn in turns]

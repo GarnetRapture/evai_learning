@@ -15,6 +15,7 @@ ADAPTERS_DIR: Path = ARTIFACT_DIR / "adapters"
 MERGED_DIR: Path = ARTIFACT_DIR / "merged"
 GGUF_DIR: Path = ARTIFACT_DIR / "gguf"
 REPORTS_DIR: Path = ARTIFACT_DIR / "reports"
+SCRATCH_DIR: Path = PROJECT_ROOT / "tmp-codex"
 
 
 def spirit_adapter_dir(slug: str) -> Path:
@@ -30,8 +31,10 @@ def ensure_artifact_directories() -> None:
         ARTIFACT_DIR,
         DATASETS_DIR,
         ADAPTERS_DIR,
-        MERGED_DIR,
-        GGUF_DIR,
         REPORTS_DIR,
     ):
         directory.mkdir(parents=True, exist_ok=True)
+
+
+ROSTER_FILE_NAME = "spirit_roster.json"
+SPIRIT_FILE_NAME = "spirit.json"

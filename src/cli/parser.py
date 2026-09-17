@@ -7,7 +7,6 @@ from cli import (
     export_commands,
     inspection_commands,
     training_commands,
-    web_commands,
 )
 
 COMMAND_MODULES = (
@@ -17,7 +16,6 @@ COMMAND_MODULES = (
     evaluation_commands,
     export_commands,
     adapter_commands,
-    web_commands,
 )
 
 

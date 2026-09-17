@@ -2,7 +2,8 @@ from pathlib import Path
 
 from common.errors import ConfigurationError
 from common.paths import spirit_adapter_dir
-from training.spirit_lora import SpiritLoraConfig, SpiritLoraTrainer, load_spirit_lora_config
+from training.config import SpiritLoraConfig, load_spirit_lora_config
+from training.spirit_lora import SpiritLoraTrainer
 
 
 def load_training_config(config_path: Path | None = None) -> SpiritLoraConfig:

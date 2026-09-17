@@ -25,8 +25,13 @@ def export_spirit(slug: str, output: Path) -> Path:
         "base_model": "LiquidAI/LFM2.5-230M-Base",
         "spirit": slug,
         "project_root": str(PROJECT_ROOT),
-        "files": {key: {"path": path.relative_to(PROJECT_ROOT).as_posix(),
-                        "sha256": compute_file_sha256(path)} for key, path in files.items()},
+        "files": {
+            key: {
+                "path": path.relative_to(PROJECT_ROOT).as_posix(),
+                "sha256": compute_file_sha256(path),
+            }
+            for key, path in files.items()
+        },
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

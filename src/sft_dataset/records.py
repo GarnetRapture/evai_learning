@@ -1,21 +1,13 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from common.messages import SFTRecordTurn
 from sft_dataset.dialogue import (
     DialogueExchange,
     DialogueExtractionResult,
     TurnClassification,
 )
 from sft_dataset.normalize import is_empty_text, normalize_text
-
-
-@dataclass(frozen=True)
-class SFTRecordTurn:
-    role: str
-    content: str
-
-    def to_dict(self) -> dict[str, str]:
-        return {"role": self.role, "content": self.content}
 
 
 @dataclass(frozen=True)
@@ -151,5 +143,3 @@ def build_persona_dataset(
             )
 
     return records, exclusions
-
-

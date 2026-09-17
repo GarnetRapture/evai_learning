@@ -14,6 +14,11 @@ def cmd_export(args: argparse.Namespace) -> int:
 
 
 def register(subparsers: SubParsers) -> None:
-    add_persona_id_argument(add_command(
-        subparsers, "export", "Export a shared-base spirit adapter manifest", cmd_export,
-    ))
+    add_persona_id_argument(
+        add_command(
+            subparsers,
+            "export",
+            "Export a shared-base spirit adapter manifest",
+            cmd_export,
+        )
+    )

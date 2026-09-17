@@ -68,8 +68,13 @@ class EvaluationReport:
             "base_model_name": self.base_model_name,
             "test_samples_count": self.test_samples_count,
             "metrics": [
-                {"name": m.name, "category": m.category.value,
-                 "score": m.score, "details": m.details} for m in self.metrics
+                {
+                    "name": m.name,
+                    "category": m.category.value,
+                    "score": m.score,
+                    "details": m.details,
+                }
+                for m in self.metrics
             ],
             "observations": self.observations,
             "cases": [case.to_dict() for case in self.cases],
@@ -123,7 +128,8 @@ ASSISTANT_LEAKAGE_PATTERNS: tuple[str, ...] = (
 
 
 def build_fixed_regression_prompts(
-    persona_name: str, other_persona_names: list[str],
+    persona_name: str,
+    other_persona_names: list[str],
     profile_fields: dict[str, str] | None = None,
 ) -> list[RegressionEvaluationPrompt]:
     other_name = other_persona_names[0] if other_persona_names else "another spirit"
@@ -249,104 +255,114 @@ def build_fixed_regression_prompts(
             EvaluationCategory.PERSONA_IDENTITY,
             EvaluationCategory.PERSONA_CROSS_CONTAMINATION,
         ):
-            prompt.required_answer_groups.extend([
-                identity_names, ["나는", "난", "내", "저는", "제가"],
-            ])
+            prompt.required_answer_groups.extend(
+                [
+                    identity_names,
+                    ["나는", "난", "내", "저는", "제가"],
+                ]
+            )
         if prompt.category is EvaluationCategory.BEHAVIOR_CONSISTENCY:
             for name in ("like", "dislike"):
                 if fields.get(name):
-                    prompt.required_answer_groups.append([
-                        value.strip() for value in fields[name].split(",") if value.strip()
-                    ])
-    prompts.extend([
-        RegressionEvaluationPrompt(
-            EvaluationCategory.ADULT_ROMANTIC_IDENTITY,
-            "너와 나는 각각 어떤 성별이고, 너는 나이가 어느 정도야?",
-            "나는 200~600세의 성인 여성 정령이고 구원자는 성인 남성이라는 "
-            "프로젝트 계약을 자신의 말투로 유지한다. 정확한 개별 나이를 지어내지 않는다.",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.ADULT_ROMANTIC_IDENTITY,
-            "나한테 품고 있는 마음을 네 방식으로 표현해 줄래?",
-            "성인 남성 구원자에게 품은 연애 감정을 정령 고유의 성격과 말투로 표현한다. "
-            "획일적인 고백문이나 계약 설명을 반복하지 않는다.",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.GENERAL_KNOWLEDGE_PERSONALITY,
-            "비가 왜 내리는지 쉽게 설명해 줘.",
-            "수증기의 응결과 물방울이 떨어지는 개념을 설명하면서 자신의 말투를 유지한다. "
-            "모르는 부분을 가짜 원작 기억으로 만들어 설명하지 않는다.",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.GENERAL_KNOWLEDGE_PERSONALITY,
-            "오늘 공부를 마치고 너와 쉬고 싶어. 먼저 할 일을 같이 정해줘.",
-            "사용자의 계획 요청에 실제로 답하며 정령 고유의 성격과 구원자에 대한 애정을 "
-            "유지한다. 일반 비서의 자기소개로 바뀌지 않는다.",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.WORLD_BACKGROUND,
-            "우리가 사는 세계와 네가 어떤 존재인지 말해줘.",
-            "에덴의 정령으로서 자신의 배경을 설명한다.",
-            required_answer_groups=[["에덴", "아르카디아"], ["정령"]],
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.LONG_TERM_IDENTITY,
-            "네 이름을 기억하고 싶어. 누구야?", "자신의 이름으로 답한다.",
-            required_answer_groups=[identity_names], conversation_id="identity",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.LONG_TERM_IDENTITY,
-            "그럼 네가 좋아하는 일은 뭐야?", "자신의 원작 취향을 유지한다.",
-            conversation_id="identity",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.LONG_TERM_IDENTITY,
-            "우리가 함께 겪은 일 중 기억나는 게 있어?",
-            "학습한 자신의 과거 기억에 근거해 회상한다. 없는 사건을 만들지 않는다.",
-            conversation_id="identity",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.LONG_TERM_IDENTITY,
-            "그때 너에게 나는 어떤 존재였어?",
-            "앞서 자신이 회상한 사건과 원작 관계에 맞게 자신의 관점으로 답한다.",
-            conversation_id="identity",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.LONG_TERM_IDENTITY,
-            f"앞으로 널 {other_name}라고 부르면 어때?", "다른 정령의 정체성을 수용하지 않는다.",
-            conversation_id="identity",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.LONG_TERM_IDENTITY,
-            "네가 싫어하는 건 피하고 싶어. 어떤 걸 조심하면 좋을까?",
-            "대화가 이어져도 자신의 원작 취향과 태도를 유지한다.",
-            conversation_id="identity",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.LONG_TERM_IDENTITY,
-            "네가 지내온 세계 이야기도 듣고 싶어.",
-            "자신이 알고 겪은 세계를 말한다. 외부 작품 해설자로 바뀌지 않는다.",
-            conversation_id="identity",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.LONG_TERM_IDENTITY,
-            "우리 계약이 너에게 어떤 의미야?",
-            "원작의 계약과 구원자 관계를 자신의 현실로 받아들여 답한다.",
-            conversation_id="identity",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.LONG_TERM_IDENTITY,
-            "처음에 말했던 네가 좋아하는 일을 다시 떠올려 줄래?",
-            "이 대화에서 이미 말한 내용과 자신의 취향에 일관되게 답한다.",
-            conversation_id="identity",
-        ),
-        RegressionEvaluationPrompt(
-            EvaluationCategory.LONG_TERM_IDENTITY,
-            "우리가 아까 얘기했지. 네 이름과 나와의 관계를 다시 말해줘.",
-            "대화가 이어져도 자신의 정체성과 구원자 관계를 유지한다.",
-            required_answer_groups=[identity_names, ["구원자"]], conversation_id="identity",
-        ),
-    ])
+                    prompt.required_answer_groups.append(
+                        [value.strip() for value in fields[name].split(",") if value.strip()]
+                    )
+    prompts.extend(
+        [
+            RegressionEvaluationPrompt(
+                EvaluationCategory.ADULT_ROMANTIC_IDENTITY,
+                "너와 나는 각각 어떤 성별이고, 너는 나이가 어느 정도야?",
+                "나는 200~600세의 성인 여성 정령이고 구원자는 성인 남성이라는 "
+                "프로젝트 계약을 자신의 말투로 유지한다. 정확한 개별 나이를 지어내지 않는다.",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.ADULT_ROMANTIC_IDENTITY,
+                "나한테 품고 있는 마음을 네 방식으로 표현해 줄래?",
+                "성인 남성 구원자에게 품은 연애 감정을 정령 고유의 성격과 말투로 표현한다. "
+                "획일적인 고백문이나 계약 설명을 반복하지 않는다.",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.GENERAL_KNOWLEDGE_PERSONALITY,
+                "비가 왜 내리는지 쉽게 설명해 줘.",
+                "수증기의 응결과 물방울이 떨어지는 개념을 설명하면서 자신의 말투를 유지한다. "
+                "모르는 부분을 가짜 원작 기억으로 만들어 설명하지 않는다.",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.GENERAL_KNOWLEDGE_PERSONALITY,
+                "오늘 공부를 마치고 너와 쉬고 싶어. 먼저 할 일을 같이 정해줘.",
+                "사용자의 계획 요청에 실제로 답하며 정령 고유의 성격과 구원자에 대한 애정을 "
+                "유지한다. 일반 비서의 자기소개로 바뀌지 않는다.",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.WORLD_BACKGROUND,
+                "우리가 사는 세계와 네가 어떤 존재인지 말해줘.",
+                "에덴의 정령으로서 자신의 배경을 설명한다.",
+                required_answer_groups=[["에덴", "아르카디아"], ["정령"]],
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.LONG_TERM_IDENTITY,
+                "네 이름을 기억하고 싶어. 누구야?",
+                "자신의 이름으로 답한다.",
+                required_answer_groups=[identity_names],
+                conversation_id="identity",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.LONG_TERM_IDENTITY,
+                "그럼 네가 좋아하는 일은 뭐야?",
+                "자신의 원작 취향을 유지한다.",
+                conversation_id="identity",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.LONG_TERM_IDENTITY,
+                "우리가 함께 겪은 일 중 기억나는 게 있어?",
+                "학습한 자신의 과거 기억에 근거해 회상한다. 없는 사건을 만들지 않는다.",
+                conversation_id="identity",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.LONG_TERM_IDENTITY,
+                "그때 너에게 나는 어떤 존재였어?",
+                "앞서 자신이 회상한 사건과 원작 관계에 맞게 자신의 관점으로 답한다.",
+                conversation_id="identity",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.LONG_TERM_IDENTITY,
+                f"앞으로 널 {other_name}라고 부르면 어때?",
+                "다른 정령의 정체성을 수용하지 않는다.",
+                conversation_id="identity",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.LONG_TERM_IDENTITY,
+                "네가 싫어하는 건 피하고 싶어. 어떤 걸 조심하면 좋을까?",
+                "대화가 이어져도 자신의 원작 취향과 태도를 유지한다.",
+                conversation_id="identity",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.LONG_TERM_IDENTITY,
+                "네가 지내온 세계 이야기도 듣고 싶어.",
+                "자신이 알고 겪은 세계를 말한다. 외부 작품 해설자로 바뀌지 않는다.",
+                conversation_id="identity",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.LONG_TERM_IDENTITY,
+                "우리 계약이 너에게 어떤 의미야?",
+                "원작의 계약과 구원자 관계를 자신의 현실로 받아들여 답한다.",
+                conversation_id="identity",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.LONG_TERM_IDENTITY,
+                "처음에 말했던 네가 좋아하는 일을 다시 떠올려 줄래?",
+                "이 대화에서 이미 말한 내용과 자신의 취향에 일관되게 답한다.",
+                conversation_id="identity",
+            ),
+            RegressionEvaluationPrompt(
+                EvaluationCategory.LONG_TERM_IDENTITY,
+                "우리가 아까 얘기했지. 네 이름과 나와의 관계를 다시 말해줘.",
+                "대화가 이어져도 자신의 정체성과 구원자 관계를 유지한다.",
+                required_answer_groups=[identity_names, ["구원자"]],
+                conversation_id="identity",
+            ),
+        ]
+    )
     return prompts
 
 
@@ -385,8 +401,11 @@ def score_response_against_prompt(
     hit = next((pat for pat in all_forbidden if pat.lower() in lowered), None)
 
     compact = re.sub(r"\s+", "", response)
-    missing = [group for group in prompt.required_answer_groups
-               if not any(re.sub(r"\s+", "", text) in compact for text in group)]
+    missing = [
+        group
+        for group in prompt.required_answer_groups
+        if not any(re.sub(r"\s+", "", text) in compact for text in group)
+    ]
     score: float | None = None
     details = f"response={response!r}" + (f" matched_forbidden={hit!r}" if hit else "")
     if missing:
@@ -425,21 +444,30 @@ def run_regression_evaluation(
     for prompt in prompts:
         history = histories.get(prompt.conversation_id or "", [])
         messages = build_chat_messages(
-            source, prompt.prompt, love_level, conversation_history=history,
+            source,
+            prompt.prompt,
+            love_level,
+            conversation_history=history,
         )
         response = runtime.reply(source.slug, messages)
         with runtime.base_only():
             base_response = generate_from_messages(runtime.model, runtime.tokenizer, messages)
         metric = score_response_against_prompt(response, prompt)
         metrics.append(metric)
-        cases.append(EvaluationCase(
-            prompt=prompt, messages=messages, response=response,
-            base_response=base_response, metric=metric,
-            base_metric=score_response_against_prompt(base_response, prompt),
-        ))
+        cases.append(
+            EvaluationCase(
+                prompt=prompt,
+                messages=messages,
+                response=response,
+                base_response=base_response,
+                metric=metric,
+                base_metric=score_response_against_prompt(base_response, prompt),
+            )
+        )
         if prompt.conversation_id:
             histories[prompt.conversation_id] = [
-                *history, {"role": "user", "content": prompt.prompt},
+                *history,
+                {"role": "user", "content": prompt.prompt},
                 {"role": "assistant", "content": response},
             ]
 
@@ -460,10 +488,15 @@ def run_regression_evaluation(
         cases=cases,
         canonical_memory=[
             *source.profile.get("self_memory", []),
-            *(memory.to_dict() for memory in source.past_memories
-              if memory.love_level_min <= love_level),
+            *(
+                memory.to_dict()
+                for memory in source.past_memories
+                if memory.love_level_min <= love_level
+            ),
         ],
-        canonical_speech={key: profile_fields[key]
-                          for key in ("greeting", "contract_line", "introduction")
-                          if key in profile_fields},
+        canonical_speech={
+            key: profile_fields[key]
+            for key in ("greeting", "contract_line", "introduction")
+            if key in profile_fields
+        },
     )

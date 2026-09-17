@@ -8,6 +8,7 @@ from common.errors import EvaiError
 from common.paths import SPIRIT_MEMORY_DIR
 from game_data.database import open_tbl_database
 from game_data.story import BOND_STORY_TYPES, MAIN_STORY_TYPE, StoryRepository
+from spirit_dataset.language import render
 from spirit_dataset.records import MEMORY_LINE_MAX_LENGTH, MemoryEvidence, SelfMemory, SourceClass
 from spirit_dataset.roster import SpiritIdentity
 from spirit_dataset.situations import LOVE_LEVEL_MEMORY
@@ -27,11 +28,19 @@ class PastMemory:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            **SelfMemory(self.text, (
-                MemoryEvidence(SourceClass.CANON_STORY, f"StoryInfo.No={self.story_no}"),
-                *(MemoryEvidence(SourceClass.CANON_DIALOGUE, f"Talk.No={key}")
-                  for key in self.talk_keys),
-            )).to_dict(),
+            "memory_class": (
+                "shared_world" if self.story_type == MAIN_STORY_TYPE else "personal_episode"
+            ),
+            **SelfMemory(
+                self.text,
+                (
+                    MemoryEvidence(SourceClass.CANON_STORY, f"StoryInfo.No={self.story_no}"),
+                    *(
+                        MemoryEvidence(SourceClass.CANON_DIALOGUE, f"Talk.No={key}")
+                        for key in self.talk_keys
+                    ),
+                ),
+            ).to_dict(),
             "story_no": self.story_no,
             "story_type": self.story_type,
             "love_level_min": self.love_level_min,
@@ -104,7 +113,10 @@ class PastMemoryRepository:
             if not talk_keys or not set(talk_keys) <= available_keys:
                 raise EvaiError(f"{location}: memory needs visible Talk evidence from {story_no}")
         return PastMemory(
-            text=text, story_no=story_no, story_type=story_type, love_level_min=love_level_min,
+            text=text,
+            story_no=story_no,
+            story_type=story_type,
+            love_level_min=love_level_min,
             talk_keys=talk_keys,
         )
 
@@ -135,6 +147,31 @@ def compose_system_memory(
     if love_level is not None:
         factual = (*factual, LOVE_LEVEL_MEMORY.format(level=love_level))
     return (*factual, *select_episodic_memory(past_memories, love_level))
+
+
+def compose_identity_prompt(
+    identity_memory: tuple[str, ...],
+    love_level: int | None,
+    memory_target: str | None = None,
+    language: str = "kr",
+) -> str:
+    from spirit_dataset.profile import core_identity_memory
+
+    # The same owner composes training, evaluation and chat identity.
+    # Self-memory exercises must not receive their own answer verbatim.
+    identity = tuple(
+        line for line in core_identity_memory(identity_memory) if line != memory_target
+    )
+    return "\n".join(
+        (
+            *identity,
+            render(
+                LOVE_LEVEL_MEMORY,
+                language,
+                level=love_level or MIN_LOVE_LEVEL,
+            ),
+        )
+    )
 
 
 def past_memory_from_dict(raw: dict[str, Any]) -> PastMemory:

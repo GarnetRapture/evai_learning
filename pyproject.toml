@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "GarnetRapture_evai"
 version = "0.1.0"
 description = "EVAI spirit identity training: Korean first, then English and Chinese; one LiquidAI/LFM2.5-230M-Base backbone with independent LoRA adapters"
-readme = "README.md"
+readme = "ARCHITECTURE.md"
 requires-python = ">=3.14"
 authors = [
     { email = "master@n9k32.com" }
@@ -41,11 +41,7 @@ include = [
     "sft_dataset",
     "spirit_dataset",
     "training",
-    "web",
 ]
-
-[tool.setuptools.package-data]
-web = ["index.html", "assets/**/*"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"

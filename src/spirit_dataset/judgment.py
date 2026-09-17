@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from common.errors import EvaiError
+from common.messages import SFTRecordTurn
 from common.paths import SPIRIT_JUDGMENT_DIR
-from sft_dataset.records import SFTRecordTurn
 from sft_dataset.split import DatasetSplit, SplitConfig, leakage_safe_split
 from spirit_dataset.records import (
     ExclusionReason,
@@ -18,7 +18,7 @@ from spirit_dataset.records import (
     TrainingTask,
 )
 
-SELF_JUDGMENT_CUE = "내 기억과 지금 상황을 받아들이고, 내 감정과 행동을 정리한다."
+SELF_JUDGMENT_CUE = "행동 판단 학습"
 SELF_MEMORY_CUE = "내가 알고 겪은 것을 짧게 떠올린다."
 
 
@@ -27,57 +27,71 @@ def judgment_training_records(records: list[SpiritTrainingRecord]) -> list[Spiri
     for record in records:
         output.append(record)
         trace = record.judgment
-        if record.task is not TrainingTask.SPEECH or not trace.is_complete:
+        if record.task is not TrainingTask.PERSONA_SPEECH or not trace.is_complete:
             continue
-        # The annotation was validated against this spirit's available source memory.
-        # It is an auxiliary supervised target, never a replacement for spoken dialogue.
+        # A separate, training-only label task; never reasoning followed by speech.
         prompt = [*record.prompt]
-        prompt[0] = replace(prompt[0], content="\n".join(dict.fromkeys((
-            *prompt[0].content.splitlines(), *(trace.activated_memory or ()),
-        ))))
+        prompt[0] = replace(
+            prompt[0],
+            content="\n".join(
+                dict.fromkeys(
+                    (
+                        *prompt[0].content.splitlines(),
+                        *(trace.activated_memory or ()),
+                    )
+                )
+            ),
+        )
         prompt[-1] = replace(prompt[-1], content=f"{SELF_JUDGMENT_CUE}\n{prompt[-1].content}")
-        target = "\n".join((
-            "내가 떠올린 기억: " + " / ".join(trace.activated_memory or ()),
-            f"내가 받아들인 상황: {trace.interpretation}",
-            f"내가 느끼는 감정: {trace.emotion}",
-            f"내가 바라는 것: {trace.intention}",
-            f"내 판단: {trace.decision}",
-            f"내 행동: {trace.action}",
-            "내가 건네는 말: " + "\n".join(turn.content for turn in record.completion),
-        ))
-        output.append(replace(
-            record, id=f"{record.id}:judgment", origin_id=record.id,
-            task=TrainingTask.SELF_JUDGMENT, source_class=SourceClass.TEACHER_REASONING,
-            evidence=(MemoryEvidence(
-                SourceClass.CANON_DIALOGUE, f"record_key={judgment_record_key(record.to_dict())}",
-            ),),
-            prompt=prompt, completion=[SFTRecordTurn("assistant", target)],
-        ))
+        from common.model_contract import BEHAVIOR_FIELDS
+
+        target = json.dumps(
+            {name: getattr(trace, name) for name in BEHAVIOR_FIELDS},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        output.append(
+            replace(
+                record,
+                id=f"{record.id}:judgment",
+                origin_id=record.id,
+                task=TrainingTask.BEHAVIOR_JUDGMENT,
+                source_class=SourceClass.DERIVED_BEHAVIOR,
+                evidence=(
+                    MemoryEvidence(
+                        SourceClass.CANON_DIALOGUE,
+                        f"record_key={judgment_record_key(record.to_dict())}",
+                    ),
+                ),
+                prompt=prompt,
+                completion=[SFTRecordTurn("assistant", target)],
+            )
+        )
     return output
 
 
 def split_with_judgments(
-    records: list[SpiritTrainingRecord], config: SplitConfig,
+    records: list[SpiritTrainingRecord],
+    config: SplitConfig,
+    exclusions: list[SpiritExclusionRecord] | None = None,
 ) -> DatasetSplit[SpiritTrainingRecord]:
-    split = leakage_safe_split(records, config)
-    # Sparse spirits can have just one reviewed source. Keep at least one reviewed
-    # event trainable, moving its entire completion group rather than copying a
-    # held-out judgment into training or leaking the paired original speech.
-    reviewed = [record for record in records
-                if record.task is TrainingTask.SPEECH and record.judgment.is_complete]
-    if reviewed and not any(record.judgment.is_complete for record in split.train):
-        selected = min(reviewed, key=lambda record: record.id)
-        selected_text = tuple(turn.content for turn in selected.completion)
-        for partition in (split.validation, split.test):
-            moved = [record for record in partition
-                     if tuple(turn.content for turn in record.completion) == selected_text]
-            partition[:] = [record for record in partition if record not in moved]
-            split.train.extend(moved)
-    return DatasetSplit(
-        train=judgment_training_records(split.train),
-        validation=judgment_training_records(split.validation),
-        test=judgment_training_records(split.test),
-    )
+    accepted = []
+    for record in judgment_training_records(records):
+        target = "\n".join(turn.content for turn in record.completion)
+        context = "\n".join(turn.content for turn in record.prompt)
+        if target in context:
+            if exclusions is not None:
+                exclusions.append(
+                    SpiritExclusionRecord(
+                        ExclusionReason.TARGET_LEAKAGE,
+                        "Target already present in input",
+                        record.source,
+                        target,
+                    )
+                )
+        else:
+            accepted.append(record)
+    return leakage_safe_split(accepted, config)
 
 
 def spirit_judgment_path(slug: str) -> Path:
@@ -100,8 +114,9 @@ def apply_source_judgments(
     path = spirit_judgment_path(slug)
     if not path.exists():
         return records, []
-    annotations = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
-                   if line.strip()]
+    annotations = [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
     by_key = {row["record_key"]: row for row in annotations}
     if len(by_key) != len(annotations):
         raise EvaiError(f"Duplicate source judgment in {path}")
@@ -120,23 +135,35 @@ def apply_source_judgments(
             original = "\n".join(turn.content for turn in record.completion)
             supporting = source_by_key.get(annotation.get("evidence_record_key", key))
             if supporting is None or (
-                supporting.source.kind, supporting.source.table, supporting.source.keys[:1]
+                supporting.source.kind,
+                supporting.source.table,
+                supporting.source.keys[:1],
             ) != (record.source.kind, record.source.table, record.source.keys[:1]):
-                raise EvaiError(f"Speaker evidence is outside the source episode: {slug}:{record.id}")
+                raise EvaiError(
+                    f"Speaker evidence is outside the source episode: {slug}:{record.id}"
+                )
             source_text = "\n".join(turn.content for turn in supporting.completion)
             if not evidence or any(text not in source_text for text in evidence):
                 raise EvaiError(f"Speaker correction lacks source evidence: {slug}:{record.id}")
-            exclusions.append(SpiritExclusionRecord(
-                ExclusionReason.NON_SELF_SPEECH, annotation["reason"], record.source, original,
-            ))
+            exclusions.append(
+                SpiritExclusionRecord(
+                    ExclusionReason.NON_SELF_SPEECH,
+                    annotation["reason"],
+                    record.source,
+                    original,
+                )
+            )
             used.add(key)
             continue
         raw = annotation["judgment"]
         trace = JudgmentTrace(
             situation=record.judgment.situation,
             activated_memory=tuple(raw["activated_memory"]),
-            interpretation=raw["interpretation"], decision=raw["decision"],
-            emotion=raw["emotion"], intention=raw["intention"], action=raw["action"],
+            interpretation=raw["interpretation"],
+            decision=raw["decision"],
+            emotion=raw["emotion"],
+            intention=raw["intention"],
+            action=raw["action"],
             evidence=tuple(raw["evidence"]),
         )
         context = "\n".join(turn.content for turn in (*record.prompt, *record.completion))

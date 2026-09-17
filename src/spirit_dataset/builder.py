@@ -5,13 +5,20 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
-from common.paths import DATASETS_DIR, TBL_DIR, ensure_artifact_directories
-from game_data.localization import StringResolver
+from common.messages import SFTRecordTurn
+from common.model_contract import DATASET_VERSION
+from common.paths import (
+    DATASETS_DIR,
+    ROSTER_FILE_NAME,
+    SPIRIT_FILE_NAME,
+    TBL_DIR,
+    ensure_artifact_directories,
+)
+from game_data.localization import SourceLanguage, StringResolver
 from game_data.references import StringTableReferences
 from game_data.story import StoryRepository
 from sft_dataset.dialogue import SpeakerRole, TurnClassification, classify_dialogue_turn
 from sft_dataset.manifest import compute_file_sha256
-from sft_dataset.records import SFTRecordTurn
 from sft_dataset.split import SplitConfig
 from sft_dataset.storage import persona_dataset_dir, sft_split_path, write_records_jsonl
 from spirit_dataset.judgment import (
@@ -20,14 +27,16 @@ from spirit_dataset.judgment import (
     spirit_judgment_path,
     split_with_judgments,
 )
+from spirit_dataset.language import LANGUAGE_CODES, render
 from spirit_dataset.memory import (
     MIN_LOVE_LEVEL,
     PastMemory,
     PastMemoryRepository,
+    compose_identity_prompt,
     compose_system_memory,
     spirit_memory_path,
 )
-from spirit_dataset.profile import SpiritProfile, SpiritProfileRepository, core_identity_memory
+from spirit_dataset.profile import SpiritProfile, SpiritProfileRepository
 from spirit_dataset.records import (
     ExclusionReason,
     JudgmentTrace,
@@ -42,7 +51,7 @@ from spirit_dataset.records import (
 from spirit_dataset.roster import SpiritIdentity, SpiritRoster, load_spirit_roster
 from spirit_dataset.sources import CanonicalExchange, SpiritSourceReader
 
-SPIRIT_DATASET_VERSION = "1.5.0"
+SPIRIT_DATASET_VERSION = DATASET_VERSION
 SOURCE_DATABASES: tuple[str, ...] = (
     "evertalk",
     "hero",
@@ -53,8 +62,6 @@ SOURCE_DATABASES: tuple[str, ...] = (
     "town",
     "trip",
 )
-ROSTER_FILE_NAME = "spirit_roster.json"
-SPIRIT_FILE_NAME = "spirit.json"
 EXCLUSIONS_SPLIT = "exclusions"
 CONTENT_SOURCE_TYPE = "tbl"
 
@@ -91,20 +98,29 @@ def render_prompt(
 
 
 class SpiritDatasetBuilder:
-    def __init__(self, split_config: SplitConfig | None = None) -> None:
+    def __init__(
+        self,
+        split_config: SplitConfig | None = None,
+        language: SourceLanguage = "kr",
+        source_hashes: dict[str, str] | None = None,
+    ) -> None:
         self._split_config = split_config if split_config is not None else SplitConfig()
         with ExitStack() as resources:
-            self._resolver = resources.enter_context(closing(StringResolver()))
+            self._resolver = resources.enter_context(closing(StringResolver(language=language)))
             self._references = StringTableReferences()
-            self._profiles = resources.enter_context(closing(
-                SpiritProfileRepository(self._resolver, self._references)
-            ))
+            self._profiles = resources.enter_context(
+                closing(SpiritProfileRepository(self._resolver, self._references))
+            )
             story = resources.enter_context(closing(StoryRepository(self._resolver)))
             self._memories = PastMemoryRepository(story)
             self._sources = SpiritSourceReader(self._resolver, self._references, story)
-            self._source_hashes = {
-                name: compute_file_sha256(TBL_DIR / f"{name}.db") for name in SOURCE_DATABASES
-            }
+            self._source_hashes = (
+                source_hashes
+                if source_hashes is not None
+                else {
+                    name: compute_file_sha256(TBL_DIR / f"{name}.db") for name in SOURCE_DATABASES
+                }
+            )
             self._resources = resources.pop_all()
 
     def close(self) -> None:
@@ -112,39 +128,69 @@ class SpiritDatasetBuilder:
 
     @staticmethod
     def _memory_records(
-        profile: SpiritProfile, past_memories: list[PastMemory],
+        profile: SpiritProfile,
+        past_memories: list[PastMemory],
     ) -> list[SpiritTrainingRecord]:
         memories: list[tuple[str, str, tuple[MemoryEvidence, ...], int | None, int]] = [
             (memory.text, memory.cue, memory.evidence, None, MIN_LOVE_LEVEL)
             for memory in profile.self_memory
         ]
         memories.extend(
-            (memory.text, "네가 예전에 겪은 일 하나 들려줄래?", (
-                MemoryEvidence(SourceClass.CANON_STORY, f"StoryInfo.No={memory.story_no}"),
-                *(MemoryEvidence(SourceClass.CANON_DIALOGUE, f"Talk.No={key}")
-                  for key in memory.talk_keys),
-            ), memory.story_no, memory.love_level_min)
+            (
+                memory.text,
+                "네가 예전에 겪은 일 하나 들려줄래?",
+                (
+                    MemoryEvidence(SourceClass.CANON_STORY, f"StoryInfo.No={memory.story_no}"),
+                    *(
+                        MemoryEvidence(SourceClass.CANON_DIALOGUE, f"Talk.No={key}")
+                        for key in memory.talk_keys
+                    ),
+                ),
+                memory.story_no,
+                memory.love_level_min,
+            )
             for memory in past_memories
         )
         records: list[SpiritTrainingRecord] = []
         for index, (text, cue, evidence, story_no, love_level) in enumerate(memories):
             source = SourceReference(
-                SourceKind.SELF_MEMORY, "self_memory", (profile.identity.hero_no, index),
-                story_no=story_no, source_class=SourceClass.DERIVED_MEMORY,
+                SourceKind.SELF_MEMORY,
+                "self_memory",
+                (profile.identity.hero_no, index),
+                story_no=story_no,
+                source_class=SourceClass.DERIVED_MEMORY,
             )
-            records.append(SpiritTrainingRecord(
-                id=f"self_memory:{index:05d}", source=source, love_level=love_level,
-                judgment=JudgmentTrace(situation=cue, activated_memory=(text,)),
-                prompt=[
-                    SFTRecordTurn("system", "\n".join(compose_system_memory(
-                        core_identity_memory(profile.identity_memory), [], love_level,
-                    ))),
-                    SFTRecordTurn("user", f"{SELF_MEMORY_CUE}\n{cue}"),
-                ],
-                completion=[SFTRecordTurn("assistant", text)],
-                source_class=SourceClass.DERIVED_MEMORY, evidence=evidence,
-                task=TrainingTask.SELF_MEMORY,
-            ))
+            records.append(
+                SpiritTrainingRecord(
+                    id=f"self_memory:{index:05d}",
+                    source=source,
+                    love_level=love_level,
+                    judgment=JudgmentTrace(situation=cue, activated_memory=(text,)),
+                    prompt=[
+                        SFTRecordTurn(
+                            "system",
+                            compose_identity_prompt(
+                                profile.identity_memory,
+                                love_level,
+                                text,
+                                profile.language,
+                            ),
+                        ),
+                        SFTRecordTurn(
+                            "user", f"{render(SELF_MEMORY_CUE, profile.language)}\n{cue}"
+                        ),
+                    ],
+                    completion=[SFTRecordTurn("assistant", text)],
+                    source_class=SourceClass.DERIVED_MEMORY,
+                    evidence=evidence,
+                    task=TrainingTask.SELF_MEMORY,
+                    event_keys=(
+                        (f"StoryInfo:{story_no}",)
+                        if story_no is not None
+                        else tuple(f"memory:{item.reference}" for item in evidence)
+                    ),
+                )
+            )
         return records
 
     def _records(
@@ -153,7 +199,7 @@ class SpiritDatasetBuilder:
         list[SpiritTrainingRecord], list[SpiritExclusionRecord], Counter[str], list[PastMemory]
     ]:
         identity = profile.identity
-        past_memories = self._memories.load(identity)
+        past_memories = self._memories.load(identity) if profile.language == "kr" else []
         material = self._sources.read(profile)
         records: list[SpiritTrainingRecord] = []
         exclusions = [
@@ -201,19 +247,52 @@ class SpiritDatasetBuilder:
                     judgment=JudgmentTrace(situation=exchange.situation, emotion=exchange.emotion),
                     prompt=prompt,
                     completion=completion,
+                    event_keys=(
+                        *(
+                            (f"StoryInfo:{exchange.source.story_no}",)
+                            if exchange.source.story_no is not None
+                            else ()
+                        ),
+                        f"{exchange.source.table}:{exchange.source.keys[0]}",
+                    ),
                 )
             )
         records.extend(self._memory_records(profile, past_memories))
-        records, speaker_exclusions = apply_source_judgments(identity.slug, records)
-        exclusions.extend(speaker_exclusions)
+        records = [
+            replace(
+                record,
+                event_keys=self._sources.events.keys(
+                    record.source,
+                    record.evidence,
+                ),
+            )
+            for record in records
+        ]
+        if profile.language == "kr":
+            records, speaker_exclusions = apply_source_judgments(identity.slug, records)
+            exclusions.extend(speaker_exclusions)
         # Validate annotations against all available memories first. Normal dialogue
         # then learns to speak from its weights without the answer in its system input.
-        records = [replace(record, prompt=[
-            SFTRecordTurn("system", "\n".join(compose_system_memory(
-                core_identity_memory(profile.identity_memory), [], record.love_level,
-            ))),
-            *record.prompt[1:],
-        ]) for record in records]
+        records = [
+            replace(
+                record,
+                prompt=[
+                    SFTRecordTurn(
+                        "system",
+                        compose_identity_prompt(
+                            profile.identity_memory,
+                            record.love_level,
+                            record.completion[0].content
+                            if record.task is TrainingTask.SELF_MEMORY
+                            else None,
+                            profile.language,
+                        ),
+                    ),
+                    *record.prompt[1:],
+                ],
+            )
+            for record in records
+        ]
         return records, exclusions, duplicates, past_memories
 
     def _manifest(
@@ -245,12 +324,13 @@ class SpiritDatasetBuilder:
             ),
             "factual_memory_count": len(profile.identity_memory),
             "records_by_source": dict(Counter(record.source.kind.value for record in records)),
-            "records_by_source_class": dict(Counter(
-                record.source_class.value for record in records
-            )),
+            "records_by_source_class": dict(
+                Counter(record.source_class.value for record in records)
+            ),
             "records_by_task": dict(Counter(record.task.value for record in records)),
+            "records_by_language": dict(Counter(record.language for record in records)),
             "judgment_complete_count": sum(
-                record.task is TrainingTask.SPEECH and record.judgment.is_complete
+                record.task is TrainingTask.PERSONA_SPEECH and record.judgment.is_complete
                 for record in records
             ),
             "exclusions_by_reason": dict(Counter(item.reason.value for item in exclusions)),
@@ -258,11 +338,38 @@ class SpiritDatasetBuilder:
             "splits": split_counts,
         }
 
-    def build_spirit(self, identity: SpiritIdentity) -> SpiritDatasetSummary:
+    def build_spirit(
+        self,
+        identity: SpiritIdentity,
+        translations: tuple[SpiritDatasetBuilder, ...] = (),
+    ) -> SpiritDatasetSummary:
         profile = self._profiles.load(identity)
         records, exclusions, duplicates, past_memories = self._records(profile)
+        non_self_sources = {
+            item.source for item in exclusions if item.reason is ExclusionReason.NON_SELF_SPEECH
+        }
+        profiles = {"ko": profile.to_dict()}
+        for builder in translations:
+            translated_profile = builder._profiles.load(identity)
+            language = LANGUAGE_CODES[translated_profile.language]
+            extra, rejected, repeated, _ = builder._records(translated_profile)
+            for record in extra:
+                if record.source in non_self_sources:
+                    rejected.append(
+                        SpiritExclusionRecord(
+                            ExclusionReason.NON_SELF_SPEECH,
+                            "Canonical source speaker correction applies across languages",
+                            record.source,
+                            record.completion[0].content,
+                        )
+                    )
+                else:
+                    records.append(replace(record, id=f"{language}:{record.id}", language=language))
+            exclusions.extend(rejected)
+            duplicates.update(repeated)
+            profiles[language] = translated_profile.to_dict()
         episodic_count = len(past_memories)
-        split = split_with_judgments(records, self._split_config)
+        split = split_with_judgments(records, self._split_config, exclusions)
         records = [*split.train, *split.validation, *split.test]
         split_counts = {
             "train": len(split.train),
@@ -280,6 +387,7 @@ class SpiritDatasetBuilder:
                         profile, records, exclusions, duplicates, split_counts, episodic_count
                     ),
                     "profile": profile.to_dict(),
+                    "profiles": profiles,
                     "episodic_memory": [memory.to_dict() for memory in past_memories],
                 },
                 ensure_ascii=False,
@@ -301,13 +409,25 @@ class SpiritDatasetBuilder:
         ensure_artifact_directories()
         roster = load_spirit_roster(self._resolver, self._references)
         result = SpiritDatasetBuildResult(roster=roster)
-        for identity in roster.spirits:
-            if slugs is not None and identity.slug not in slugs:
-                continue
-            summary = self.build_spirit(identity)
-            result.summaries.append(summary)
-            if summary.record_count == 0:
-                result.spirits_without_records.append(identity)
+        with ExitStack() as translations:
+            builders = tuple(
+                translations.enter_context(
+                    closing(
+                        SpiritDatasetBuilder(
+                            self._split_config,
+                            language,
+                        )
+                    )
+                )
+                for language in ("en", "zh_tw")
+            )
+            for identity in roster.spirits:
+                if slugs is not None and identity.slug not in slugs:
+                    continue
+                summary = self.build_spirit(identity, builders)
+                result.summaries.append(summary)
+                if summary.record_count == 0:
+                    result.spirits_without_records.append(identity)
         (DATASETS_DIR / ROSTER_FILE_NAME).write_text(
             json.dumps(
                 {

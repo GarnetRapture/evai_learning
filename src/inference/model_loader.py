@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 
+from common.model_contract import verify_backbone
 from common.paths import MODEL_DIR
 
 
@@ -15,12 +16,18 @@ def load_causal_lm(
 ) -> Any:
     from transformers import AutoModelForCausalLM
 
+    verify_backbone(model_dir)
     options: dict[str, Any] = {"local_files_only": True}
+    options["attn_implementation"] = "sdpa"
     if dtype is not None:
         options["dtype"] = dtype
     if device is not None:
         options["device_map"] = device
-    return AutoModelForCausalLM.from_pretrained(str(model_dir), **options)
+    model = AutoModelForCausalLM.from_pretrained(str(model_dir), **options)
+    from inference.lfm2_kernel import bind_native_liv
+
+    bind_native_liv(model)
+    return model
 
 
 def load_model_and_tokenizer(

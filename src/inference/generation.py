@@ -3,6 +3,9 @@ from typing import Any
 
 import torch
 
+from common.errors import EvaiError
+from common.model_contract import CONTEXT_LENGTH
+
 
 @dataclass(frozen=True)
 class GenerationSettings:
@@ -32,13 +35,17 @@ def generate_from_messages(
     messages: list[dict[str, str]],
     settings: GenerationSettings = DEFAULT_GENERATION_SETTINGS,
 ) -> str:
+    if settings.max_new_tokens <= 0 or settings.max_new_tokens >= CONTEXT_LENGTH:
+        raise EvaiError("Invalid generation token budget for the fixed 32768-token context")
     inputs = tokenizer.apply_chat_template(
         messages,
         add_generation_prompt=True,
         return_tensors="pt",
         return_dict=True,
     ).to(model.device)
-    with torch.no_grad():
+    if inputs["input_ids"].shape[1] + settings.max_new_tokens > CONTEXT_LENGTH:
+        raise EvaiError("Conversation exceeds the fixed 32768-token context; shorten history")
+    with torch.inference_mode():
         output_ids = model.generate(
             **inputs,
             max_new_tokens=settings.max_new_tokens,
@@ -48,4 +55,3 @@ def generate_from_messages(
         )
     new_tokens = output_ids[0][inputs["input_ids"].shape[1] :]
     return tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-

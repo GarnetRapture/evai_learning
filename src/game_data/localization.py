@@ -8,8 +8,11 @@ from game_data.database import open_tbl_database
 type SourceLanguage = Literal["kr", "en", "ja", "zh_tw", "zh_cn"]
 
 LANGUAGE_COLUMNS: dict[SourceLanguage, str] = {
-    "kr": "pool_id_kr", "en": "pool_id_en", "ja": "pool_id_ja",
-    "zh_tw": "pool_id_zh_tw", "zh_cn": "pool_id_zh_cn",
+    "kr": "pool_id_kr",
+    "en": "pool_id_en",
+    "ja": "pool_id_ja",
+    "zh_tw": "pool_id_zh_tw",
+    "zh_cn": "pool_id_zh_cn",
 }
 
 
@@ -23,10 +26,15 @@ class LocalizedText:
 
 
 class StringResolver:
-    def __init__(self, connection: sqlite3.Connection | None = None) -> None:
+    def __init__(
+        self,
+        connection: sqlite3.Connection | None = None,
+        language: SourceLanguage = "kr",
+    ) -> None:
+        self.language: SourceLanguage = language
         self._owns_connection = connection is None
-        self._connection = connection if connection is not None else open_tbl_database(
-            "localization"
+        self._connection = (
+            connection if connection is not None else open_tbl_database("localization")
         )
         try:
             self._dictionaries: dict[int, zstd.ZstdDict] = {
@@ -39,9 +47,7 @@ class StringResolver:
             self.close()
             raise
         self._pool_cache: dict[int, str | None] = {}
-        self._label_cache: dict[
-            tuple[str, int], dict[SourceLanguage, int | None] | None
-        ] = {}
+        self._label_cache: dict[tuple[str, int], dict[SourceLanguage, int | None] | None] = {}
 
     def close(self) -> None:
         if self._owns_connection:
@@ -69,7 +75,9 @@ class StringResolver:
         return text
 
     def _label_pool_ids(
-        self, string_table: str, sno: int | None,
+        self,
+        string_table: str,
+        sno: int | None,
     ) -> dict[SourceLanguage, int | None] | None:
         if sno is None or sno == 0:
             return None
@@ -82,7 +90,8 @@ class StringResolver:
             key,
         ).fetchone()
         pool_ids: dict[SourceLanguage, int | None] | None = (
-            None if row is None
+            None
+            if row is None
             else {language: row[column] for language, column in LANGUAGE_COLUMNS.items()}
         )
         self._label_cache[key] = pool_ids
@@ -93,16 +102,24 @@ class StringResolver:
         if pool_ids is None:
             return None
         return LocalizedText(
-            kr=self._pool_text(pool_ids["kr"]), en=self._pool_text(pool_ids["en"]),
-            ja=self._pool_text(pool_ids["ja"]), zh_tw=self._pool_text(pool_ids["zh_tw"]),
+            kr=self._pool_text(pool_ids["kr"]),
+            en=self._pool_text(pool_ids["en"]),
+            ja=self._pool_text(pool_ids["ja"]),
+            zh_tw=self._pool_text(pool_ids["zh_tw"]),
             zh_cn=self._pool_text(pool_ids["zh_cn"]),
         )
 
     def resolve_text(
-        self, string_table: str, sno: int | None, language: SourceLanguage,
+        self,
+        string_table: str,
+        sno: int | None,
+        language: SourceLanguage,
     ) -> str | None:
         pool_ids = self._label_pool_ids(string_table, sno)
         return self._pool_text(pool_ids[language]) if pool_ids is not None else None
 
     def resolve_kr(self, string_table: str, sno: int | None) -> str | None:
         return self.resolve_text(string_table, sno, "kr")
+
+    def resolve_current(self, string_table: str, sno: int | None) -> str | None:
+        return self.resolve_text(string_table, sno, self.language)

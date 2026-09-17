@@ -11,7 +11,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     from spirit_dataset.runtime_prompt import (
         load_spirit_prompt_source,
     )
-    from training.spirit_lora import roster_slugs
+    from training.data import roster_slugs
 
     persona_id: str = args.persona_id
     love_level: int = args.love_level
@@ -30,8 +30,13 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     runtime = SpiritRuntime([persona_id])
     profile = source.profile
     report = run_regression_evaluation(
-        runtime, source, profile["fields"], other_names, love_level,
-        adapter_version=str(adapter_dir), base_model_name=runtime.model.config._name_or_path,
+        runtime,
+        source,
+        profile["fields"],
+        other_names,
+        love_level,
+        adapter_version=str(adapter_dir),
+        base_model_name=runtime.model.config._name_or_path,
     )
     metrics = report.metrics
 

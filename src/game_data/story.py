@@ -7,6 +7,7 @@ from game_data.localization import StringResolver
 MAIN_STORY_TYPE = 1
 BOND_STORY_TYPES: frozenset[int] = frozenset({2, 10})
 
+
 @dataclass(frozen=True)
 class StoryEpisode:
     story_no: int
@@ -47,7 +48,7 @@ class StoryRepository:
         self._line_cache: dict[int, list[StoryLine]] = {}
         try:
             self._actor_names: dict[int, str | None] = {
-                row["No"]: resolver.resolve_kr("StringCharacter", row["NameSno"])
+                row["No"]: resolver.resolve_current("StringCharacter", row["NameSno"])
                 for row in self._connection.execute("SELECT No, NameSno FROM TalkActor")
             }
         except BaseException:
@@ -75,7 +76,7 @@ class StoryRepository:
                 act=row["Act"],
                 chapter=row["Chapter"],
                 episode=row["Episode"],
-                title=self._resolver.resolve_kr("StringTalk", row["EpisodeNameSno"]),
+                title=self._resolver.resolve_current("StringTalk", row["EpisodeNameSno"]),
                 talk_group=row["TalkGroup"],
                 messenger_group=row["MessengerGroup"],
                 ending_affinity=row["EndingAffinity"],
@@ -102,7 +103,8 @@ class StoryRepository:
             "SELECT No, GroupNo, TalkIndex, TalkType, UiType, SpeakerNo, ChoiceGroup, "
             "LoveLevel, HeroNo FROM Talk WHERE Hide = 0 AND GroupNo IN "
             f"(SELECT TalkGroup FROM StoryInfo WHERE StoryType IN ({placeholders})) "
-            "ORDER BY GroupNo, TalkIndex, No", story_types,
+            "ORDER BY GroupNo, TalkIndex, No",
+            story_types,
         ).fetchall()
         groups: dict[int, list[StoryLine]] = {}
         for line in self._decode_lines(rows):
@@ -123,7 +125,7 @@ class StoryRepository:
                 choice_group=row["ChoiceGroup"],
                 love_level=row["LoveLevel"],
                 hero_no=row["HeroNo"],
-                text=self._resolver.resolve_kr("StringTalk", row["No"]),
+                text=self._resolver.resolve_current("StringTalk", row["No"]),
             )
             for row in rows
         ]

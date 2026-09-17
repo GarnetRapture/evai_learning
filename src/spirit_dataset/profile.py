@@ -1,10 +1,11 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from common.errors import EvaiError
 from game_data.database import open_tbl_database
 from game_data.localization import StringResolver
 from game_data.references import StringTableReferences
+from spirit_dataset.language import render
 from spirit_dataset.records import MEMORY_LINE_MAX_LENGTH, MemoryEvidence, SelfMemory, SourceClass
 from spirit_dataset.roster import SpiritIdentity
 from spirit_dataset.text_cleaning import clean_game_text
@@ -33,10 +34,20 @@ PROJECT_CONTRACT_MEMORY: tuple[tuple[str, str], ...] = (
 
 
 def core_identity_memory(identity_memory: tuple[str, ...]) -> tuple[str, ...]:
-    contract_text = {text for text, _ in PROJECT_CONTRACT_MEMORY}
-    return tuple(dict.fromkeys((
-        *identity_memory[:1], *(text for text in identity_memory if text in contract_text),
-    )))
+    contract_text = {
+        render(text, language)
+        for text, _ in PROJECT_CONTRACT_MEMORY
+        for language in ("kr", "en", "zh_tw")
+    }
+    return tuple(
+        dict.fromkeys(
+            (
+                *identity_memory[:1],
+                *(text for text in identity_memory if text in contract_text),
+            )
+        )
+    )
+
 
 SHARED_WORLD_MEMORY: tuple[tuple[str, str, str], ...] = (
     ("나는 유물에 깃든 영혼인 정령", "main_story 1-2", "넌 어떤 존재야?"),
@@ -117,10 +128,12 @@ class SpiritProfile:
     identity_memory: tuple[str, ...]
     rejected_memory: list[RejectedMemoryLine] = field(default_factory=list)
     self_memory: tuple[SelfMemory, ...] = ()
+    language: str = "kr"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "hero_no": self.identity.hero_no,
+            "language": self.language,
             "slug": self.identity.slug,
             "name": self.identity.name,
             "name_en": self.identity.name_en,
@@ -138,9 +151,7 @@ class SpiritProfile:
         }
 
 
-def accept_memory_line(
-    text: str, accepted: list[str], rejected: list[RejectedMemoryLine]
-) -> bool:
+def accept_memory_line(text: str, accepted: list[str], rejected: list[RejectedMemoryLine]) -> bool:
     if len(text) > MEMORY_LINE_MAX_LENGTH:
         rejected.append(RejectedMemoryLine(text=text, reason="exceeds_length"))
         return False
@@ -159,7 +170,7 @@ class SpiritProfileRepository:
         self._hero.close()
 
     def _resolve(self, table: str, column: str, sno: int | None) -> str | None:
-        text = self._resolver.resolve_kr(self._references.string_table(table, column), sno)
+        text = self._resolver.resolve_current(self._references.string_table(table, column), sno)
         cleaned = clean_game_text(text)
         return cleaned or None
 
@@ -174,7 +185,9 @@ class SpiritProfileRepository:
             f"WHERE Hide = 0 AND {column} = ? ORDER BY No",
             (hero_no,),
         ):
-            text = clean_game_text(self._resolver.resolve_kr("StringCharacter", row["CommentDesc"]))
+            text = clean_game_text(
+                self._resolver.resolve_current("StringCharacter", row["CommentDesc"])
+            )
             if not text:
                 continue
             comments.append(
@@ -194,10 +207,18 @@ class SpiritProfileRepository:
             "SELECT * FROM HeroDesc WHERE HeroNo = ?", (identity.hero_no,)
         ).fetchone()
         hero_row = self._hero.execute(
-            "SELECT RaceSno FROM Hero WHERE No = ?", (identity.hero_no,)
+            "SELECT RaceSno, NameSno FROM Hero WHERE No = ?", (identity.hero_no,)
         ).fetchone()
         if desc is None or hero_row is None:
             raise EvaiError(f"Hero {identity.hero_no} has no HeroDesc/Hero row")
+        language = self._resolver.language
+        name = self._resolver.resolve_current(
+            self._references.string_table("Hero", "NameSno"),
+            hero_row["NameSno"],
+        )
+        if not name:
+            raise EvaiError(f"Missing {language} identity name for Hero {identity.hero_no}")
+        identity = replace(identity, name=name)
         fields: dict[str, str] = {}
         desc_columns = {**HERO_DESC_SHIFTED_COLUMNS, **HERO_DESC_ALIGNED_COLUMNS}
         for field_name, column in desc_columns.items():
@@ -214,14 +235,19 @@ class SpiritProfileRepository:
 
         def add_memory(text: str, source_class: SourceClass, reference: str, cue: str) -> None:
             if accept_memory_line(text, accepted, rejected):
-                self_memory.append(SelfMemory(
-                    text, (MemoryEvidence(source_class, reference),), cue,
-                ))
+                self_memory.append(
+                    SelfMemory(
+                        text,
+                        (MemoryEvidence(source_class, reference),),
+                        cue,
+                    )
+                )
 
         add_memory(
-            f"나는 {identity.name}", SourceClass.CANON_TBL,
+            render("나는 {name}", language, name=identity.name),
+            SourceClass.CANON_TBL,
             f"Hero.No={identity.hero_no}; Hero.NameSno",
-            "네 이름이 뭐야?",
+            render("네 이름이 뭐야?", language),
         )
         for field_name, template in PROFILE_MEMORY_TEMPLATES.items():
             value = fields.get(field_name)
@@ -234,19 +260,23 @@ class SpiritProfileRepository:
             )
             for item in values:
                 reference = (
-                    f"Hero.No={identity.hero_no}; Hero.RaceSno" if field_name == "race"
+                    f"Hero.No={identity.hero_no}; Hero.RaceSno"
+                    if field_name == "race"
                     else f"HeroDesc.HeroNo={identity.hero_no}; HeroDesc.{desc_columns[field_name]}"
                 )
                 add_memory(
-                    template.format(value=item), SourceClass.CANON_TBL, reference,
-                    PROFILE_MEMORY_CUES[field_name],
+                    render(template, language, value=item),
+                    SourceClass.CANON_TBL,
+                    reference,
+                    render(PROFILE_MEMORY_CUES[field_name], language),
                 )
         for text, source, cue in SHARED_WORLD_MEMORY:
             source_class = (
-                SourceClass.PROJECT_CONTRACT if source.startswith("user_contract")
+                SourceClass.PROJECT_CONTRACT
+                if source.startswith("user_contract")
                 else SourceClass.CANON_STORY
             )
-            add_memory(text, source_class, source, cue)
+            add_memory(render(text, language), source_class, source, render(cue, language))
 
         return SpiritProfile(
             identity=identity,
@@ -256,4 +286,5 @@ class SpiritProfileRepository:
             identity_memory=tuple(accepted),
             rejected_memory=rejected,
             self_memory=tuple(self_memory),
+            language=language,
         )

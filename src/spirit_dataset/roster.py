@@ -10,6 +10,8 @@ from game_data.references import StringTableReferences
 from persona.loader import discover_persona_files, load_persona_file
 
 SLUG_INVALID_CHARACTER_PATTERN = re.compile(r"[^a-z0-9]+")
+# Canonical HeroNo mapping recorded in docs/game_data_analysis.md section 4.
+LEGACY_HERO_SLUGS = {10: "irene", 20: "canney", 30: "pixie", 40: "casper"}
 
 
 @dataclass(frozen=True)
@@ -41,11 +43,10 @@ def legacy_persona_names() -> dict[str, Path]:
     return names
 
 
-def load_spirit_roster(
-    resolver: StringResolver, references: StringTableReferences
-) -> SpiritRoster:
+def load_spirit_roster(resolver: StringResolver, references: StringTableReferences) -> SpiritRoster:
     name_table = references.string_table("Hero", "NameSno")
     legacy_by_name = legacy_persona_names()
+    legacy_by_slug = {path.stem: path for path in legacy_by_name.values()}
     matched_files: set[Path] = set()
     spirits: list[SpiritIdentity] = []
     used_slugs: dict[str, int] = {}
@@ -59,7 +60,11 @@ def load_spirit_roster(
         name_en = resolver.resolve_text(name_table, row["NameSno"], "en")
         if not name:
             raise EvaiError(f"Hero {row['No']} has no Korean name")
-        legacy_file = legacy_by_name.get(name)
+        legacy_file = (
+            legacy_by_slug.get(LEGACY_HERO_SLUGS[row["No"]])
+            if row["No"] in LEGACY_HERO_SLUGS
+            else legacy_by_name.get(name)
+        )
         if legacy_file is not None:
             slug = legacy_file.stem
             matched_files.add(legacy_file)

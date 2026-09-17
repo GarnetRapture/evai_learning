@@ -89,8 +89,7 @@ def parse_choice_options(
     choices = [line for line in block if line.ui_type == CHOICE_UI_TYPE]
     if layout is ChoiceLayout.EACH_ROW_IS_OPTION:
         return [
-            (index, unquote_utterance(line.text), (line.key,))
-            for index, line in enumerate(choices)
+            (index, unquote_utterance(line.text), (line.key,)) for index, line in enumerate(choices)
         ]
     grouped: dict[int, list[ScriptLine]] = {}
     for line in choices:
@@ -106,9 +105,7 @@ def parse_choice_options(
 
 
 class ScriptWalker:
-    def __init__(
-        self, is_spirit_line: Callable[[ScriptLine], bool], layout: ChoiceLayout
-    ) -> None:
+    def __init__(self, is_spirit_line: Callable[[ScriptLine], bool], layout: ChoiceLayout) -> None:
         self._is_spirit_line = is_spirit_line
         self._layout = layout
 
@@ -117,8 +114,9 @@ class ScriptWalker:
 
     def parse(self, lines: Sequence[ScriptLine]) -> ScriptParseResult:
         converted = [line for line in lines if line.ui_type in CONVERTED_UI_TYPES and line.text]
-        unconverted = [line for line in lines if line.ui_type not in CONVERTED_UI_TYPES
-                       or not line.text]
+        unconverted = [
+            line for line in lines if line.ui_type not in CONVERTED_UI_TYPES or not line.text
+        ]
         exchanges: list[ScriptExchange] = []
         unanswered: list[PendingVariant] = []
         states = self._walk(converted, [ScriptState()], exchanges)
@@ -145,10 +143,14 @@ class ScriptWalker:
     ) -> ScriptState:
         if not state.buffer:
             return state
-        exchanges.append(ScriptExchange(
-            user_items=state.items, previous_spirit_text=state.previous,
-            spirit_lines=state.buffer, context_keys=state.keys,
-        ))
+        exchanges.append(
+            ScriptExchange(
+                user_items=state.items,
+                previous_spirit_text=state.previous,
+                spirit_lines=state.buffer,
+                context_keys=state.keys,
+            )
+        )
         return ScriptState(previous=" ".join(line.text for line in state.buffer))
 
     def _walk(
@@ -180,31 +182,49 @@ class ScriptWalker:
                 branch_lines = lines[block_end:branch_end]
                 joined: list[ScriptState] = []
                 for option_group, option_text, option_keys in options:
-                    option_states = [ScriptState(
-                        items=(*state.items, option_text), keys=(*state.keys, *option_keys),
-                        previous=state.previous,
-                    ) for state in states]
+                    option_states = [
+                        ScriptState(
+                            items=(*state.items, option_text),
+                            keys=(*state.keys, *option_keys),
+                            previous=state.previous,
+                        )
+                        for state in states
+                    ]
                     if branch_lines:
                         option_states = self._walk(
-                            [branch_line for branch_line in branch_lines
-                             if branch_line.choice_group == option_group],
-                            option_states, exchanges,
+                            [
+                                branch_line
+                                for branch_line in branch_lines
+                                if branch_line.choice_group == option_group
+                            ],
+                            option_states,
+                            exchanges,
                         )
                     joined.extend(option_states)
                 states = list(dict.fromkeys(joined))
                 index = branch_end
                 continue
             if line.ui_type in SPEECH_UI_TYPES and self._is_spirit_line(line):
-                states = [ScriptState(
-                    state.items, state.keys, state.previous, (*state.buffer, line),
-                ) for state in states]
+                states = [
+                    ScriptState(
+                        state.items,
+                        state.keys,
+                        state.previous,
+                        (*state.buffer, line),
+                    )
+                    for state in states
+                ]
             else:
                 item = context_item(line)
                 if item is not None:
-                    states = list(dict.fromkeys(
-                        ScriptState((*flushed.items, item), (*flushed.keys, line.key),
-                                    flushed.previous)
-                        for state in states for flushed in (self._flush(state, exchanges),)
-                    ))
+                    states = list(
+                        dict.fromkeys(
+                            ScriptState(
+                                (*flushed.items, item), (*flushed.keys, line.key), flushed.previous
+                            )
+                            for state in states
+                            for flushed in (self._flush(state, exchanges),)
+                        )
+                    )
             index += 1
         return states

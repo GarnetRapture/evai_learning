@@ -13,7 +13,7 @@ from common.paths import (
 from inspection.base_model_assets import inspect_local_model
 from inspection.runtime_environment import inspect_environment, validate_environment
 from persona.loader import discover_persona_files, inspect_persona_files
-from training.trainer import load_training_config
+from training.config import load_spirit_lora_config as load_training_config
 
 
 def cmd_env(args: argparse.Namespace) -> int:
@@ -217,9 +217,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 def register(subparsers: SubParsers) -> None:
-    add_command(
-        subparsers, "env", "Inspect Python runtime, PyTorch, CUDA, and GPU status", cmd_env
-    )
+    add_command(subparsers, "env", "Inspect Python runtime, PyTorch, CUDA, and GPU status", cmd_env)
     add_command(
         subparsers,
         "data",
