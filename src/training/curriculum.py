@@ -18,7 +18,11 @@ def training_signature(
     """Identify the exact learning objective, data selection and optimizer schedule."""
     settings = dict(config["training"])
     for resource_setting in (
-        "save_interval_seconds", "preparation_workers", "token_memory_limit_mib"
+        "save_interval_seconds",
+        "preparation_workers",
+        "token_memory_limit_mib",
+        "micro_batch_tokens",
+        "gpu_memory_fraction",
     ):
         settings.pop(resource_setting)
     material = {

@@ -23,9 +23,11 @@ class TrainingSettings:
     max_length: int
     batch_size: int
     micro_batch_size: int
+    micro_batch_tokens: int
     epochs: int
     seed: int
     base_dtype: str
+    gpu_memory_fraction: float
     token_memory_limit_mib: int
     preparation_workers: int
     curriculum: str
@@ -60,14 +62,20 @@ def load_training_config(config_path: Path | None = None) -> TrainingConfig:
     except (KeyError, TypeError) as err:
         raise ConfigurationError(f"Invalid joint training settings: {err}", path) from err
     training, optimizer = config.training, config.optimizer
-    if training.base_dtype != "float32":
+    if training.base_dtype != "bfloat16":
         raise ConfigurationError(
-            "Full training retains FP32 master weights with BF16 autocast", path
+            "Training keeps one bfloat16 weight copy updated by stochastic-rounding AdamW", path
         )
     if not 0 < training.micro_batch_size <= training.batch_size or training.epochs <= 0:
         raise ConfigurationError("Invalid batch size or epoch count", path)
     if not 0 < training.max_length <= CONTEXT_LENGTH:
         raise ConfigurationError("Training length exceeds the fixed context", path)
+    if training.micro_batch_tokens < training.max_length:
+        raise ConfigurationError(
+            "A micro batch must hold at least one maximum-length record", path
+        )
+    if not 0 < training.gpu_memory_fraction <= 1:
+        raise ConfigurationError("GPU memory fraction must be in (0, 1]", path)
     if training.token_memory_limit_mib <= 0:
         raise ConfigurationError("Token storage requires a positive CPU memory limit", path)
     if training.preparation_workers <= 0:

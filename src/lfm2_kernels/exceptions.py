@@ -1,17 +1,21 @@
 """Errors raised by this library alone, so it carries no host-project dependency."""
 
 
-class ShortConvError(RuntimeError):
-    """Base class for every failure raised by shortconv_triton."""
+class Lfm2KernelsError(RuntimeError):
+    """Base class for every failure raised by lfm2_kernels."""
 
 
-class ShortConvUnsupportedError(ShortConvError):
-    """The running environment cannot execute the fused Triton path."""
+class Lfm2KernelsUnsupportedError(Lfm2KernelsError):
+    """The running environment or request cannot execute on the CUDA operator library."""
 
 
-class ShortConvShapeError(ShortConvError):
-    """Operand ranks, sizes or strides do not match the fused contract."""
+class Lfm2KernelsShapeError(Lfm2KernelsError):
+    """Operand ranks, sizes or dtypes do not match the operator contract."""
 
 
-class ShortConvDeviceError(ShortConvError):
+class Lfm2KernelsDeviceError(Lfm2KernelsError):
     """Operands are not all resident on one CUDA device."""
+
+
+class Lfm2KernelsNonFiniteError(Lfm2KernelsError):
+    """A gradient norm became non-finite; the optimizer withheld that update."""

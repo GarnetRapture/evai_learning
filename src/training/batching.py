@@ -32,6 +32,7 @@ def _steps(
     split: str,
     batch_size: int,
     micro_batch_size: int,
+    micro_batch_tokens: int,
     pad_token_id: int,
     rng: random.Random | None,
     skip_batches: int,
@@ -40,7 +41,7 @@ def _steps(
         yield TrainingStep(
             tuple(
                 collate(batch, corpus.token_ids, pad_token_id)
-                for batch in _micro_batches(records, micro_batch_size, corpus.max_length)
+                for batch in _micro_batches(records, micro_batch_size, micro_batch_tokens)
             ),
             tuple(record.fingerprint for record in records),
         )
@@ -52,11 +53,21 @@ def prefetched_steps(
     split: str,
     batch_size: int,
     micro_batch_size: int,
+    micro_batch_tokens: int,
     pad_token_id: int,
     rng: random.Random | None = None,
     skip_batches: int = 0,
 ) -> Iterator[Iterator[TrainingStep]]:
-    producer = _steps(corpus, split, batch_size, micro_batch_size, pad_token_id, rng, skip_batches)
+    producer = _steps(
+        corpus,
+        split,
+        batch_size,
+        micro_batch_size,
+        micro_batch_tokens,
+        pad_token_id,
+        rng,
+        skip_batches,
+    )
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="training-data")
 
     def consume() -> Generator[TrainingStep]:

@@ -7,7 +7,7 @@ from common.errors import EvaiError
 from common.model_contract import verify_backbone
 from common.model_storage import model_storage_lock
 from common.paths import MODEL_DIR
-from inference.lfm2_kernel import bind_native_liv
+from inference.lfm2_kernel import bind_cuda_operators
 
 
 def load_tokenizer(model_dir: Path = MODEL_DIR) -> Any:
@@ -29,7 +29,7 @@ def load_causal_lm(
         if expected_sha is not None and digest != expected_sha:
             raise EvaiError("The model changed while preparing its training update")
         model = AutoModelForCausalLM.from_pretrained(str(model_dir), **options)
-    bind_native_liv(model)
+    bind_cuda_operators(model)
     return model
 
 

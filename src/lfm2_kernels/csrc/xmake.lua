@@ -1,34 +1,43 @@
 set_project("lfm2_kernels")
 set_xmakever("3.1.1")
 add_rules("mode.release")
+add_rules("plugin.compile_commands.autoupdate", {outputdir = path.join(os.scriptdir(), "..", "..", "..", ".vscode")})
 
-target("lfm2_kernels_cuda")
-    set_kind("shared")
+target("lfm2_kernels_device")
+    set_kind("static")
     add_toolchains("cuda")
     set_languages("c++20")
     set_runtimes("MD")
-    add_files("*.cu")
-    add_headerfiles("*.cuh")
+    set_values("cuda.rdc", false)
+    add_files("shortconv_kernels.cu", "sr_adamw_kernels.cu", "rms_norm_kernels.cu")
+    add_headerfiles("kernels.cuh", "device_storage.cuh")
     add_cugencodes("sm_86", "compute_86")
-    add_cuflags(
-        "--expt-relaxed-constexpr",
-        "-D__CUDA_NO_HALF_OPERATORS__",
-        "-D__CUDA_NO_HALF_CONVERSIONS__",
-        "-D__CUDA_NO_BFLOAT16_CONVERSIONS__",
-        "-D__CUDA_NO_HALF2_OPERATORS__",
-        "-Xcompiler=/Zc:__cplusplus",
-        "-Xcompiler=/Zc:preprocessor",
-        {force = true})
+    add_cuflags("-Xcompiler=/Zc:__cplusplus", "-Xcompiler=/Zc:preprocessor", "-Xcompiler=/utf-8", {force = true})
+
+target("lfm2_kernels_cuda")
+    set_kind("shared")
+    add_deps("lfm2_kernels_device")
+    set_policy("build.cuda.devlink", false)
+    set_languages("c++26")
+    set_runtimes("MD")
+    set_exceptions("cxx")
+    add_files("operators.cpp")
+    add_cxxflags("/Zc:__cplusplus", "/Zc:preprocessor", "/utf-8", "/external:anglebrackets", "/external:W0", {force = true})
     add_defines("NOMINMAX")
     add_links("c10", "c10_cuda", "torch", "torch_cpu", "torch_cuda", "cudart_static")
     on_load(function (target)
+        import("detect.sdks.find_cuda")
+        local cuda = assert(find_cuda(), "the configured CUDA toolkit was not found")
         local query = os.iorunv("python", {
             "-c",
             "import pathlib,torch;r=pathlib.Path(torch.__file__).parent;"
                 .. "print(r/'include');print(r/'include'/'torch'/'csrc'/'api'/'include');print(r/'lib')"})
         local lines = query:split("\n")
-        target:add("cuflags", "-isystem=" .. lines[1]:trim(), {force = true})
-        target:add("cuflags", "-isystem=" .. lines[2]:trim(), {force = true})
+        local external = table.join(cuda.includedirs, {lines[1]:trim(), lines[2]:trim()})
+        for _, directory in ipairs(external) do
+            target:add("cxxflags", "/external:I" .. directory, {force = true})
+        end
+        target:add("linkdirs", cuda.linkdirs)
         target:add("linkdirs", lines[3]:trim())
     end)
     after_build(function (target)

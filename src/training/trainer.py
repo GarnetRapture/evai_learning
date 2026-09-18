@@ -25,6 +25,7 @@ from common.model_contract import (
 from common.model_storage import MODEL_STAGE, commit_pending_model, model_storage_lock
 from common.paths import MODEL_DIR, REPORTS_DIR
 from inference.model_loader import load_causal_lm, load_tokenizer
+from lfm2_kernels.optimizer import StochasticRoundingAdamW
 from spirit_dataset.roster import roster_slugs
 from training.batching import prefetched_steps
 from training.config import TrainingConfig, TrainingSettings
@@ -45,14 +46,18 @@ def _evaluate(
     with (
         torch.inference_mode(),
         prefetched_steps(
-            corpus, split, settings.batch_size, settings.micro_batch_size, pad
+            corpus,
+            split,
+            settings.batch_size,
+            settings.micro_batch_size,
+            settings.micro_batch_tokens,
+            pad,
         ) as steps,
     ):
         for step in steps:
             for cpu_batch in step.micro_batches:
                 batch = move_batch(cpu_batch, "cuda")
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    loss = completion_token_loss(model, batch)
+                loss = completion_token_loss(model, batch)
                 total += loss
                 del batch, loss
             tokens += step.target_count
@@ -83,8 +88,6 @@ def _write_model(
 ) -> None:
     stage = MODEL_STAGE
     stage.mkdir(parents=True, exist_ok=True)
-    # Keep the live FP32 weights and AdamW state on the GPU. Preserve tied storage
-    # when producing the bounded BF16 CPU snapshot; never instantiate another model.
     shared: dict[tuple[int, int, tuple[int, ...], tuple[int, ...]], torch.Tensor] = {}
     state = {}
     for name, tensor in model.state_dict().items():
@@ -144,6 +147,7 @@ def _write_model(
 def train_model(config: TrainingConfig) -> Path:
     if not torch.cuda.is_available() or "RTX 3070" not in torch.cuda.get_device_name(0):
         raise EvaiError("This training pipeline requires the fixed RTX 3070")
+    torch.cuda.set_per_process_memory_fraction(config.training.gpu_memory_fraction, 0)
     started = time.perf_counter()
     torch.manual_seed(config.training.seed)
     rng = random.Random(config.training.seed)
@@ -204,7 +208,7 @@ def train_model(config: TrainingConfig) -> Path:
         return MODEL_DIR
     pad_token_id = tokenizer.pad_token_id
     del tokenizer
-    model = load_causal_lm(device="cuda", dtype=torch.float32, expected_sha=input_sha)
+    model = load_causal_lm(device="cuda", dtype=torch.bfloat16, expected_sha=input_sha)
     model.requires_grad_(True)
     model.config.use_cache = False
     shapes = {name: tuple(value.shape) for name, value in model.named_parameters()}
@@ -249,11 +253,12 @@ def train_model(config: TrainingConfig) -> Path:
             "data order and LR position restored; AdamW moments are reinitialized",
             flush=True,
         )
-    optimizer = torch.optim.AdamW(
-        parameters,
+    optimizer = StochasticRoundingAdamW(
+        model,
         lr=config.optimizer.learning_rate,
         weight_decay=config.optimizer.weight_decay,
-        fused=True,
+        max_grad_norm=config.optimizer.max_grad_norm,
+        seed=config.training.seed,
     )
     per_epoch = math.ceil(report.train_examples / config.training.batch_size)
     total_steps = per_epoch * config.training.epochs
@@ -285,6 +290,7 @@ def train_model(config: TrainingConfig) -> Path:
             "train",
             config.training.batch_size,
             config.training.micro_batch_size,
+            config.training.micro_batch_tokens,
             pad_token_id,
             rng,
             epoch_completed,
@@ -298,18 +304,13 @@ def train_model(config: TrainingConfig) -> Path:
                 count = step.target_count
                 example_count = step.example_count
                 report.train_micro_batches += len(step.micro_batches)
-                optimizer.zero_grad(set_to_none=True)
+                optimizer.zero_grad()
                 for cpu_batch in step.micro_batches:
                     batch = move_batch(cpu_batch, "cuda")
-                    with torch.autocast("cuda", dtype=torch.bfloat16):
-                        loss = completion_token_loss(model, batch, per_example=True)
-                        normalized = loss / example_count
-                    normalized.backward()
+                    loss = completion_token_loss(model, batch, per_example=True)
+                    (loss / example_count).backward()
                     total_loss += loss.detach()
-                    del loss, normalized, batch
-                torch.nn.utils.clip_grad_norm_(
-                    parameters, config.optimizer.max_grad_norm, error_if_nonfinite=True
-                )
+                    del loss, batch
                 optimizer.step()
                 scheduler.step()
                 run_consumed.update(set(step.record_fingerprints) - previously_consumed)
@@ -320,6 +321,7 @@ def train_model(config: TrainingConfig) -> Path:
                 report.optimizer_steps += 1
                 epoch_completed += 1
                 if time.perf_counter() - last_saved >= config.training.save_interval_seconds:
+                    optimizer.raise_if_nonfinite()
                     _save_model(
                         model,
                         report,
@@ -340,6 +342,7 @@ def train_model(config: TrainingConfig) -> Path:
                     last_saved = time.perf_counter()
                     print(f"Latest model updated at step {report.optimizer_steps}", flush=True)
                 if report.optimizer_steps % 25 == 0 or report.optimizer_steps % per_epoch == 0:
+                    optimizer.raise_if_nonfinite()
                     mean_loss = float(total_loss.item()) / total_examples
                     elapsed = time.perf_counter() - interval_started
                     completed = report.optimizer_steps - interval_step
@@ -370,8 +373,9 @@ def train_model(config: TrainingConfig) -> Path:
         report.epochs.append(EpochResult(epoch, train_loss, validation_loss))
         print(f"epoch={epoch} validation_loss={validation_loss:.6f}", flush=True)
         resume = None
-    optimizer.zero_grad(set_to_none=True)
+    optimizer.raise_if_nonfinite()
     del scheduler, optimizer, parameters
+    model.zero_grad(set_to_none=True)
     torch.cuda.empty_cache()
     report.test_loss = _evaluate(model, corpus, "test", pad_token_id, config.training)
     if {name: tuple(value.shape) for name, value in model.named_parameters()} != shapes:
