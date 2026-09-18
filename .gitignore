@@ -6,6 +6,7 @@ AGENTS.md
 CLAUDE.md
 HANDOFF.md
 plan.md
+.xmake/
 
 tmp-*/
 tmp_claude/
@@ -17,6 +18,8 @@ tmp_codex/
 /src/**/*.py[cod]
 /src/**/*.egg-info/
 /src/**/assets/
+/src/**/*.dll
+/build/
 
 artifacts/
 configs/

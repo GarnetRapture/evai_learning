@@ -22,6 +22,8 @@ dependencies = [
     "pyyaml>=6.0",
     "gguf",
     "numpy",
+    "triton-windows>=3.8; sys_platform == 'win32'",
+    "triton>=3.8; sys_platform != 'win32'",
 ]
 
 [project.scripts]
@@ -39,9 +41,13 @@ include = [
     "inspection",
     "persona",
     "sft_dataset",
+    "shortconv_triton*",
     "spirit_dataset",
     "training",
 ]
+
+[tool.setuptools.package-data]
+shortconv_triton = ["py.typed"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
