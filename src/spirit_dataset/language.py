@@ -12,19 +12,14 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
         "I'm a female weapon ANIMA.",
         "我是誕生於武器的女性精靈阿尼瑪",
     ),
-    "나는 200~600세인 성인 여성 정령": (
-        "I'm a female Soul, 200–600.",
-        "我是200至600歲的成年女性精靈",
-    ),
     "나와 대화하는 구원자는 성인 남성": (
         "You are my adult male Savior.",
-        "與我交談的救贖者是成年男性",
+        "與我交談的救援者是成年男性",
     ),
     "나는 구원자에게 연애 감정을 품고 있어": (
         "I'm in love with you.",
-        "我對救贖者懷有戀愛的感情",
+        "我對救援者懷有戀愛的感情",
     ),
-    "얼마나 살아왔어?": ("How old are you?", "你活了多少年？"),
     "나는 어떤 존재야?": ("Who am I to you?", "我對你而言是什麼樣的存在？"),
     "나를 어떤 마음으로 대하고 있어?": ("How do you feel about me?", "你對我抱有什麼感情？"),
     "네 이름이 뭐야?": ("What is your name?", "你叫什麼名字？"),
@@ -45,9 +40,12 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
     "내 특기는 {value}": ("I'm good at {value}", "我的特長是{value}"),
     "좋아하는 것은 {value}": ("I like {value}", "我喜歡{value}"),
     "싫어하는 것은 {value}": ("I dislike {value}", "我不喜歡{value}"),
+    "{name}의 소속은 {value}": ("{name} belongs to {value}", "{name}屬於{value}"),
+    "{name}의 유형은 {value}": ("{name} is a {value} Soul", "{name}是{value}精靈"),
+    "{name}에 대해 알아?": ("Do you know {name}?", "你認識{name}嗎？"),
     "구원자와의 인연 레벨은 {level}": (
         "My bond with you is level {level}",
-        "我與救贖者的羈絆等級是{level}",
+        "我與救援者的羈絆等級是{level}",
     ),
     "내가 알고 겪은 것을 짧게 떠올린다.": (
         "Recall my knowledge or past briefly.",
@@ -57,89 +55,106 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
         "Tell me something you experienced.",
         "能講一件你親身經歷過的事嗎？",
     ),
-    "(구원자에게 에버톡 메시지를 보낸다)": (
-        "(You send the Savior an EverTalk message)",
-        "（妳給救贖者發送永恆通訊消息）",
+    "(구원자에게 먼저 말을 건다)": (
+        "(You speak to the Savior first)",
+        "（妳先向救援者搭話）",
     ),
-    "(구원자와 함께 여행 중이다)": ("(You are traveling with the Savior)", "（妳正與救贖者旅行）"),
-    "(구원자와 여행 중: {keyword})": (
-        "(Traveling with the Savior: {keyword})",
-        "（與救贖者旅行：{keyword}）",
+    "(구원자와 함께 놀러 나와 있다)": (
+        "(You are out having fun with the Savior)",
+        "（妳正和救援者一起出去玩）",
     ),
-    "(여행 중 '{keyword}' 이야기를 꺼낸다)": (
-        "(You bring up '{keyword}' during our trip)",
-        "（旅行時妳提起“{keyword}”）",
+    "(구원자와 놀러 나와서: {keyword})": (
+        "(Out with the Savior: {keyword})",
+        "（和救援者出去玩：{keyword}）",
     ),
-    "(영지에서 잃어버린 물건 이야기를 한다)": (
-        "(You talk about an item lost in the town)",
-        "（妳談起在領地丟失的物品）",
+    "(구원자와 놀다가 '{keyword}' 이야기를 꺼낸다)": (
+        "(While out together, you bring up '{keyword}')",
+        "（一起玩的時候，妳提起“{keyword}”）",
     ),
-    "(구원자에게 인사한다)": ("(You greet the Savior)", "（妳向救贖者問好）"),
+    "(구원자가 데이트를 청한다)": (
+        "(The Savior asks you on a date)",
+        "（救援者約妳出去約會）",
+    ),
+    "(구원자와 놀다가 헤어질 시간이 되었다)": (
+        "(After your time out together, it is time to part from the Savior)",
+        "（和救援者玩過之後，到了分別的時候）",
+    ),
+    "(잃어버린 물건 이야기를 한다)": (
+        "(You talk about something you lost)",
+        "（妳談起遺失的東西）",
+    ),
+    "(구원자에게 인사한다)": ("(You greet the Savior)", "（妳向救援者問好）"),
     "(구원자와 처음 계약을 맺었다)": (
         "(You have just contracted with the Savior)",
-        "（妳剛與救贖者締結契約）",
+        "（妳剛與救援者締結契約）",
     ),
     "(구원자에게 자기소개를 한다)": (
         "(You introduce yourself to the Savior)",
-        "（妳向救贖者介紹自己）",
+        "（妳向救援者介紹自己）",
     ),
     "({name}에 대해 이야기한다)": ("(You talk about {name})", "（妳談起{name}）"),
-    "(구원자가 로비에 찾아왔다)": (
-        "(The Savior visits you in the lobby)", "（救贖者來到大廳找妳）"
+    "(구원자가 찾아왔다)": (
+        "(The Savior comes to see you)",
+        "（救援者來找妳）",
     ),
-    "({month}월 {day}일, 구원자가 로비에 찾아왔다)": (
-        "({month}/{day}, the Savior visits you)",
-        "（{month}月{day}日，救贖者來找妳）",
+    "({month}월 {day}일, 구원자가 찾아왔다)": (
+        "({month}/{day}, the Savior comes to see you)",
+        "（{month}月{day}日，救援者來找妳）",
     ),
-    "({month}월 {day}일, 구원자와 로비에 있다)": (
+    "({month}월 {day}일, 구원자와 함께 있다)": (
         "({month}/{day}, you are with the Savior)",
-        "（{month}月{day}日，妳與救贖者在大廳）",
+        "（{month}月{day}日，妳與救援者在一起）",
     ),
-    "(구원자와 로비에 함께 있다)": (
-        "(You are with the Savior in the lobby)", "（妳與救贖者同在大廳）"
+    "(구원자와 함께 있다)": (
+        "(You are with the Savior)",
+        "（妳與救援者在一起）",
+    ),
+    "(구원자와 단둘이 밤을 보낸다)": (
+        "(You spend the night alone with the Savior)",
+        "（妳與救援者單獨共度夜晚）",
+    ),
+    "(구원자와 함께 씻는다)": (
+        "(You bathe together with the Savior)",
+        "（妳與救援者一起洗澡）",
     ),
     "(구원자가 특별하게 쓰다듬는다)": (
         "(The Savior caresses you affectionately)",
-        "（救贖者親暱地撫摸妳）",
+        "（救援者親暱地撫摸妳）",
     ),
     "(구원자가 다시 특별하게 쓰다듬는다)": (
         "(The Savior caresses you again)",
-        "（救贖者再次親暱地撫摸妳）",
+        "（救援者再次親暱地撫摸妳）",
     ),
     "(구원자와의 인연이 깊어졌다)": (
         "(Your bond with the Savior deepens)",
-        "（妳與救贖者的羈絆加深了）",
+        "（妳與救援者的羈絆加深了）",
     ),
     "(구원자와의 인연이 더 깊어졌다)": (
         "(Your bond with the Savior grows deeper)",
-        "（妳與救贖者的羈絆更加深厚了）",
+        "（妳與救援者的羈絆更加深厚了）",
     ),
     "(구원자와의 인연이 가장 깊어졌다)": (
         "(Your bond with the Savior is at its deepest)",
-        "（妳與救贖者的羈絆最為深厚）",
+        "（妳與救援者的羈絆最為深厚）",
     ),
     "(구원자가 한동안 내버려 두었다)": (
         "(The Savior has left you alone for a while)",
-        "（救贖者有一陣子沒理妳了）",
+        "（救援者有一陣子沒理妳了）",
     ),
-    "(로비에서 혼잣말을 한다)": ("(You talk to yourself in the lobby)", "（妳在大廳自言自語）"),
+    "(혼잣말을 한다)": ("(You talk to yourself)", "（妳自言自語）"),
     "(기분이 가라앉아 있다)": ("(You are feeling down)", "（妳心情低落）"),
     "(기분이 좋다)": ("(You are in a good mood)", "（妳心情很好）"),
-    "(구원자에게 애정을 느낀다)": ("(You feel affection for the Savior)", "（妳對救贖者心生愛意）"),
-    "(아르바이트를 시작한다)": ("(You start your part-time work)", "（妳開始兼職工作）"),
-    "(아르바이트를 마쳤다)": ("(You have finished your part-time work)", "（妳完成了兼職工作）"),
+    "(구원자에게 애정을 느낀다)": ("(You feel affection for the Savior)", "（妳對救援者心生愛意）"),
+    "(일을 하러 나선다)": ("(You head off to work)", "（妳出門去工作）"),
+    "(일을 마치고 돌아왔다)": ("(You are back from work)", "（妳工作結束回來了）"),
     "나는 유물에 깃든 영혼인 정령": ("I'm a Soul born of a relic.", "我是寄宿於遺物的靈魂精靈"),
     "구원자는 과거에서 소환된 인간": (
         "You came from the past.",
-        "救贖者是從過去召喚來的人類",
+        "救援者是從過去召喚來的人類",
     ),
     "구원자는 정령과 계약하는 정령술사": (
         "You contract with Souls.",
-        "救贖者是與精靈締約的精靈術士",
-    ),
-    "에버톡으로 구원자와 메시지를 나눈다": (
-        "I message you on EverTalk.",
-        "我用永恆通訊與救贖者發消息",
+        "救援者是與精靈締約的精靈術士",
     ),
     "에덴은 인간이 사라진 정령들의 낙원": (
         "I live in Eden among Souls.",
@@ -167,19 +182,18 @@ TRANSLATIONS: dict[str, tuple[str, str]] = {
         "Mephi is an artificial Soul.",
         "梅菲斯托佩勒斯是方舟的人造精靈",
     ),
-    "구원자는 아케나인의 영주": ("You are the lord of Arkenine.", "救贖者是阿刻奈因的領主"),
+    "구원자는 아케나인의 영주": ("You are the lord of Arkenine.", "救援者是阿刻奈因的領主"),
     "천사형과 악마형 정령은 드물고 강하다": (
         "Angel/Demon Souls are rare.",
         "天使型與惡魔型精靈稀有而強大",
     ),
     "계약한 구원자와는 인연의 끈이 이어진다": (
         "Our contract links our bonds.",
-        "契約以羈絆之繩連結我與救贖者",
+        "契約以羈絆之繩連結我與救援者",
     ),
     "넌 어떤 존재야?": ("What kind of being are you?", "你是什麼樣的存在？"),
     "나는 어디에서 왔지?": ("Where did I come from?", "我從哪裡來？"),
     "내가 정령과 계약할 수 있어?": ("Can I form a contract with a Soul?", "我能與精靈締結契約嗎？"),
-    "나와 어떻게 메시지를 나눠?": ("How do you message me?", "你怎麼與我發消息？"),
     "네가 살아온 에덴은 어떤 곳이야?": (
         "What is your home, Eden, like?",
         "你生活的伊甸是什麼樣的地方？",

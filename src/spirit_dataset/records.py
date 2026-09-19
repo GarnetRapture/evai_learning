@@ -24,6 +24,8 @@ class TrainingTask(StrEnum):
     PERSONA_SPEECH = "persona_speech"
     SELF_MEMORY = "self_memory"
     BEHAVIOR_JUDGMENT = "behavior_judgment"
+    GENERAL_DIALOGUE = "general_dialogue"
+    GENERAL_JUDGMENT = "general_judgment"
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,7 @@ class SourceKind(StrEnum):
     TOWN_LOST_ITEM = "town_lost_item"
     HERO_DESC = "hero_desc"
     HERO_COMMENT = "hero_comment"
+    EXTERNAL_DIALOGUE = "external_dialogue"
 
 
 class ExclusionReason(StrEnum):
@@ -72,6 +75,8 @@ class ExclusionReason(StrEnum):
     UNRESOLVED_STRING = "unresolved_string"
     EMPTY_TEXT = "empty_text"
     UNANSWERED_CONTEXT = "unanswered_context"
+    UNCONVERTED_SPEECH = "unconverted_speech"
+    EXTERNAL_CONTEXT_BREAK = "external_context_break"
 
 
 @dataclass(frozen=True)

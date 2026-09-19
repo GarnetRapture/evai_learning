@@ -21,6 +21,7 @@ from spirit_dataset.records import (
     TrainingTask,
 )
 
+SOURCE_SPEECH_KEY_PREFIX = "source_speech:"
 SELF_JUDGMENT_CUE = "행동 판단 학습"
 SELF_MEMORY_CUE = "내가 알고 겪은 것을 짧게 떠올린다."
 
@@ -97,7 +98,10 @@ def split_with_judgments(
         retained: list[list[SpiritTrainingRecord]] = [[], [], []]
         new = []
         for record in accepted:
-            destination = previous.get(judgment_record_key(record.to_dict()))
+            serialized = record.to_dict()
+            destination = previous.get(judgment_record_key(serialized))
+            if destination is None:
+                destination = previous.get(source_speech_key(serialized))
             if destination is None:
                 new.append(record)
             else:
@@ -131,6 +135,18 @@ def judgment_record_key(record: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def source_speech_key(record: dict[str, Any]) -> str:
+    """Partition identity that survives changes to the rendered situation context."""
+    material = {
+        "language": record.get("language", "ko"),
+        "task": record.get("task"),
+        "source": {key: record["source"][key] for key in ("kind", "table")},
+        "speech": [turn["content"] for turn in record["completion"]],
+    }
+    encoded = json.dumps(material, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return f"{SOURCE_SPEECH_KEY_PREFIX}{hashlib.sha256(encoded).hexdigest()}"
+
+
 def source_split_assignments(slug: str) -> dict[str, int] | None:
     """Keep existing source-response events in their original dataset partition."""
     paths = [sft_split_path(slug, split) for split in ("train", "validation", "test")]
@@ -145,6 +161,7 @@ def source_split_assignments(slug: str) -> dict[str, int] | None:
             for line in handle:
                 record = json.loads(line)
                 assignments.setdefault(judgment_record_key(record), destination)
+                assignments.setdefault(source_speech_key(record), destination)
     return assignments
 
 

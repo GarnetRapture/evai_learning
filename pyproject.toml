@@ -34,7 +34,9 @@ include = [
     "common",
     "evaluation",
     "export",
+    "external_dialogue",
     "game_data",
+    "general_corpus",
     "inference",
     "inspection",
     "lfm2_kernels*",
@@ -42,10 +44,13 @@ include = [
     "sft_dataset",
     "spirit_dataset",
     "training",
+    "web_chat",
 ]
 
 [tool.setuptools.package-data]
 lfm2_kernels = ["py.typed", "lfm2_kernels_cuda.dll"]
+web_chat = ["static/*.html", "static/*.css", "static/*.js"]
+general_corpus = ["dictionary/*.txt", "dictionary/LICENSE"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"

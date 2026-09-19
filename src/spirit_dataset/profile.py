@@ -8,8 +8,8 @@ from game_data.references import StringTableReferences
 from spirit_dataset.curriculum import learns_narrative
 from spirit_dataset.language import render
 from spirit_dataset.records import MEMORY_LINE_MAX_LENGTH, MemoryEvidence, SelfMemory, SourceClass
-from spirit_dataset.roster import SpiritIdentity
-from spirit_dataset.text_cleaning import clean_game_text
+from spirit_dataset.roster import UNRELEASED_SPIRIT_HERO_NOS, SpiritIdentity
+from spirit_dataset.text_cleaning import clean_game_text, is_localization_placeholder
 from spirit_dataset.world import shared_world_memories
 
 HERO_DESC_SHIFTED_COLUMNS: dict[str, str] = {
@@ -29,7 +29,6 @@ HERO_DESC_ALIGNED_COLUMNS: dict[str, str] = {
 PROFILE_LIST_SEPARATOR = ","
 
 PROJECT_CONTRACT_MEMORY: tuple[tuple[str, str], ...] = (
-    ("나는 200~600세인 성인 여성 정령", "얼마나 살아왔어?"),
     ("나와 대화하는 구원자는 성인 남성", "나는 어떤 존재야?"),
     ("나는 구원자에게 연애 감정을 품고 있어", "나를 어떤 마음으로 대하고 있어?"),
 )
@@ -58,7 +57,6 @@ SHARED_WORLD_MEMORY: tuple[tuple[str, str, str], ...] = (
     *((text, "user_contract 2026-09-17", cue) for text, cue in PROJECT_CONTRACT_MEMORY),
     ("구원자는 과거에서 소환된 인간", "main_story 1-2", "나는 어디에서 왔지?"),
     ("구원자는 정령과 계약하는 정령술사", "main_story 0-2", "내가 정령과 계약할 수 있어?"),
-    ("에버톡으로 구원자와 메시지를 나눈다", "main_story 1-6", "나와 어떻게 메시지를 나눠?"),
     ("에덴은 인간이 사라진 정령들의 낙원", "main_story 0-2", "네가 살아온 에덴은 어떤 곳이야?"),
     ("에덴의 대륙 이름은 아르카디아", "main_story 0-3", "우리가 사는 대륙 이름이 뭐야?"),
     ("정령은 죽으면 정령석으로 돌아가 잠든다", "main_story 1-2; 5-3", "정령은 죽으면 어떻게 돼?"),
@@ -96,6 +94,18 @@ PROFILE_MEMORY_TEMPLATES: dict[str, str] = {
     "dislike": "싫어하는 것은 {value}",
 }
 PROFILE_LIST_FIELDS: frozenset[str] = frozenset({"hobby", "speciality", "like", "dislike"})
+OTHER_SPIRIT_UNION_TEMPLATE = "{name}의 소속은 {value}"
+OTHER_SPIRIT_RACE_TEMPLATE = "{name}의 유형은 {value}"
+OTHER_SPIRIT_CUE = "{name}에 대해 알아?"
+
+
+@dataclass(frozen=True)
+class OtherSpiritFact:
+    hero_no: int
+    name: str
+    value: str
+    template: str
+    reference: str
 
 
 @dataclass(frozen=True)
@@ -175,9 +185,59 @@ class SpiritProfileRepository:
         self._resolver = resolver
         self._references = references
         self._hero = open_tbl_database("hero")
+        self._roster: tuple[SpiritIdentity, ...] = ()
+        self._roster_fact_cache: tuple[OtherSpiritFact, ...] | None = None
 
     def close(self) -> None:
         self._hero.close()
+
+    def bind_roster(self, spirits: list[SpiritIdentity]) -> None:
+        self._roster = tuple(spirits)
+        self._roster_fact_cache = None
+
+    def _roster_facts(self) -> tuple[OtherSpiritFact, ...]:
+        if self._roster_fact_cache is None:
+            union_column = HERO_DESC_SHIFTED_COLUMNS["union"]
+            facts: list[OtherSpiritFact] = []
+            for spirit in self._roster:
+                hero = self._hero.execute(
+                    "SELECT NameSno, RaceSno FROM Hero WHERE No = ?", (spirit.hero_no,)
+                ).fetchone()
+                desc = self._hero.execute(
+                    f"SELECT {union_column} FROM HeroDesc WHERE HeroNo = ?", (spirit.hero_no,)
+                ).fetchone()
+                name = self._resolve("Hero", "NameSno", hero["NameSno"])
+                union = (
+                    None
+                    if desc is None
+                    else self._resolve("HeroDesc", union_column, desc[union_column])
+                )
+                if name is None:
+                    raise EvaiError(f"Missing identity name for Hero {spirit.hero_no}")
+                if union is not None:
+                    facts.append(
+                        OtherSpiritFact(
+                            spirit.hero_no,
+                            name,
+                            union,
+                            OTHER_SPIRIT_UNION_TEMPLATE,
+                            f"HeroDesc.HeroNo={spirit.hero_no}; HeroDesc.{union_column}",
+                        )
+                    )
+                    continue
+                race = self._resolve("Hero", "RaceSno", hero["RaceSno"])
+                if race is not None:
+                    facts.append(
+                        OtherSpiritFact(
+                            spirit.hero_no,
+                            name,
+                            race,
+                            OTHER_SPIRIT_RACE_TEMPLATE,
+                            f"Hero.No={spirit.hero_no}; Hero.RaceSno",
+                        )
+                    )
+            self._roster_fact_cache = tuple(facts)
+        return self._roster_fact_cache
 
     def _resolve(self, table: str, column: str, sno: int | None) -> str | None:
         text = self._resolver.resolve_current(self._references.string_table(table, column), sno)
@@ -219,7 +279,9 @@ class SpiritProfileRepository:
         hero_row = self._hero.execute(
             "SELECT RaceSno, NameSno FROM Hero WHERE No = ?", (identity.hero_no,)
         ).fetchone()
-        if desc is None or hero_row is None:
+        if hero_row is None or (
+            desc is None and identity.hero_no not in UNRELEASED_SPIRIT_HERO_NOS
+        ):
             raise EvaiError(f"Hero {identity.hero_no} has no HeroDesc/Hero row")
         language = self._resolver.language
         name = self._resolver.resolve_current(
@@ -232,8 +294,10 @@ class SpiritProfileRepository:
         fields: dict[str, str] = {}
         desc_columns = {**HERO_DESC_SHIFTED_COLUMNS, **HERO_DESC_ALIGNED_COLUMNS}
         for field_name, column in desc_columns.items():
+            if desc is None:
+                break
             value = self._resolve("HeroDesc", column, desc[column])
-            if value is not None:
+            if value is not None and not is_localization_placeholder(value):
                 fields[field_name] = value
         race = self._resolve("Hero", "RaceSno", hero_row["RaceSno"])
         if race is not None:
@@ -288,10 +352,6 @@ class SpiritProfileRepository:
                     render(PROFILE_MEMORY_CUES[field_name], language),
                 )
         for text, source, cue in SHARED_WORLD_MEMORY:
-            if not learns_narrative(identity.grade) and not (
-                source.startswith("user_contract") or text == "나는 유물에 깃든 영혼인 정령"
-            ):
-                continue
             source_class = (
                 SourceClass.PROJECT_CONTRACT
                 if source.startswith("user_contract")
@@ -302,13 +362,21 @@ class SpiritProfileRepository:
                 text = own_reference[1]
             add_memory(render(text, language), source_class, source, render(cue, language))
 
-        if learns_narrative(identity.grade):
-            for memory in shared_world_memories(language):
-                if len(memory.text) > MEMORY_LINE_MAX_LENGTH:
-                    raise EvaiError(f"Shared world fact exceeds memory contract: {memory.text}")
-                if memory.text not in accepted:
-                    accepted.append(memory.text)
-                    self_memory.append(memory)
+        for memory in shared_world_memories(language):
+            if len(memory.text) > MEMORY_LINE_MAX_LENGTH:
+                raise EvaiError(f"Shared world fact exceeds memory contract: {memory.text}")
+            if memory.text not in accepted:
+                accepted.append(memory.text)
+                self_memory.append(memory)
+        for other in self._roster_facts():
+            if other.hero_no == identity.hero_no:
+                continue
+            add_memory(
+                render(other.template, language, name=other.name, value=other.value),
+                SourceClass.CANON_TBL,
+                other.reference,
+                render(OTHER_SPIRIT_CUE, language, name=other.name),
+            )
 
         return SpiritProfile(
             identity=identity,

@@ -9,7 +9,7 @@ import torch
 from common.errors import EvaiError
 from sft_dataset.storage import message_list
 from spirit_dataset.records import TrainingTask
-from spirit_dataset.runtime_prompt import bind_spirit_identity
+from spirit_dataset.runtime_prompt import bind_training_context
 from training.records import (
     IGNORE_INDEX,
     EncodedRecord,
@@ -50,7 +50,7 @@ def prepare_records(
     prompts = []
     completions = []
     for record in records:
-        prompt = bind_spirit_identity(message_list(record["prompt"]), spirit_id)
+        prompt = bind_training_context(message_list(record["prompt"]), spirit_id)
         completion = message_list(record["completion"])
         if not prompt or prompt[-1]["role"] != "user":
             raise EvaiError(f"Record requires a final user context: {record['id']}")

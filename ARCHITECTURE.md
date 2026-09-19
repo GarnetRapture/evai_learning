@@ -56,12 +56,13 @@ LiquidAI/LFM2.5-230M-Base에서 출발하는 텍스트 전용 230M 모델 하나
 
 ## 5. 세계관과 원본 소유
 
-세계관과 설정의 사실 근거는 docs/game_data_analysis.md와 data/tbl/*.db다. 이미 검증된 데이터와 provenance를 사용한다. 구조 변경을 이유로 올바른 원본을 반복 생성하거나 의미를 바꾸지 않는다.
+세계관과 설정의 사실 근거는 docs/game_data_analysis.md와 docs/tbl/*.db다. 게임 원본 DB는 학습 데이터셋이 아니므로 `data/`가 아니라 `docs/tbl/`에 둔다(2026-09-19 사용자 이동). 이미 검증된 데이터와 provenance를 사용한다. 구조 변경을 이유로 올바른 원본을 반복 생성하거나 의미를 바꾸지 않는다.
 
 - 선택 정령의 검증된 대사만 그 정령의 발화 정답이다. 구원자·다른 정령·서술자의 말은 문맥이다.
 - 공통 세계관은 공유 지식이며 다른 정령의 개인사를 자신의 경험으로 바꾸지 않는다.
 - 개인 사건은 실제 소유·참여 근거에 따른다. 미확인 과거·관계·감정을 만들어 원본처럼 넣지 않는다.
 - Common/Rare는 성인 여성 정령 아니마의 1인칭 정체성, 성격, 말투가 중심이다. 없는 서사를 채우지 않는다.
+- 공통 역사(메인 스토리 기반 공유 세계관 기억)는 등급과 관계없이 모든 정령이 공유한다(2026-09-19 사용자 확정). 모든 정령은 다른 정령을 안다. 각 정령은 로스터의 다른 정령마다 TBL 사실 한 줄(소속 `HeroDesc` union, 없으면 `Hero.RaceSno` 유형)을 기억 문답으로 학습한다(`profile.py` `OtherSpiritFact`). 개인 사건 기억은 계속 실제 소유 근거를 따른다.
 - Rare 로제의 메인스토리와 Epic 이격 로제의 별도 이야기는 정령 ID와 사건 소유로 구분한다. 두 모델을 만드는 것이 아니다.
 - 정령은 인간이 아닌 영혼이며 세계관의 무기 유래 아니마다. 성인 여성 정령과 성인 남성 구원자의 관계를 정령마다 고유하게 표현한다.
 - 콘텐츠 표현에는 docs/content_safety_policy.md의 적용 가능한 기준을 사용한다. 해당 문서만 교육의 중심으로 바꾸지 않는다.
@@ -92,6 +93,10 @@ LiquidAI/LFM2.5-230M-Base에서 출발하는 텍스트 전용 230M 모델 하나
 전체 정령을 이미 학습한 모델의 대화 보정은 `dialogue_alignment` 커리큘럼을 사용한다. 대화형 발화와 ID·이름 연결을 중심으로, 정령·언어별 기존 대화를 함께 학습한다. 세계관 사실 문답 전체를 대화 보정의 중심으로 반복하지 않는다. 현재 설정은 보정 사례 수만큼 기존 대화를 중복 없이 추출하여 1회 처리한다. 추출 건수와 원본·선택 범위를 보고서에 남기고 검증·평가 분할은 추출 대상으로 삼지 않는다. 이는 같은 모델의 전체 가중치를 보정하는 과정이며 별도 모델·adapter·런타임 답변 대체 경로를 만들지 않는다.
 
 실제 대화 실패를 보정하는 새 작성 사례는 기존 `data/spirit_lessons/curriculum.json`에 해당 정령의 원문 말투 근거와 함께 기록한다. `conversation_extension` 사례는 `conversation_question:persona_lesson:` ID로 원문 사건의 분할을 이어받으므로, 추가 때문에 이미 학습한 사건을 평가로 재배치하지 않는다. `dialogue_extension` 커리큘럼은 이 새 대화 사례와 같은 정령·언어의 기존 대화만 현재 모델에 보정한다. 원문 대사나 세계관 사실을 새로 꾸며 쓰지 않으며, 작성 대화는 `derived_speech`로 구분한다.
+
+원문에 없는 보정 데이터(성인 대상 콘텐츠 등급의 친밀 반응 등)는 확장 레슨으로 추가한다. `data/spirit_lessons/extensions/<확장 이름>.json`에 `curriculum.json`과 같은 형식(`topics`, `spirits.<HeroNo>.style_source`·`answers`·`conversations`)으로 두면 `build-dataset`이 파일 이름 순으로 모두 읽는다. 확장의 새 주제는 기본 주제와 이름이 겹치면 안 되며 기본 주제를 그대로 참조할 수 있다. 레코드 ID에는 `<확장 이름>:`이, source table에는 `lesson_extension:<확장 이름>`이 붙어 기본 레슨과 구분된다. 확장 레슨을 포함한 모든 작성 레슨은 `sft_dataset/dialogue.py`의 분류를 거치며, 불법 범주(미성년·비동의·착취 등)만 `content_classification`으로 제외되고 수위 자체로는 제외하지 않는다. 확장 파일의 해시는 정령별 manifest의 `lesson_extensions_sha256`에 기록된다.
+
+일반 상식 코퍼스는 세계관과 섞이지 않도록 입력 조건을 분리한다. `cli build-general-corpus`가 `data/external`의 SODA(en), KorEmpatheticDialogues(ko), tiny-multiturn-chat-ko(ko), LCCC(간체→대만 번체, `general_corpus/chinese_script.py`), tw_chatbot_arena(zh_tw)를 대화 한 건당 한 행으로 `data/general_corpus/general_corpus.parquet`(zstd) 하나에 변환한다. 학습 색인 때 이 파일을 스트림으로 읽어 레코드로 펼치며 중간 파일을 만들지 않는다. 일반 레코드의 system은 `Context: general` 헤더이며 어떤 `SpiritId`도 붙지 않는다(`runtime_prompt.bind_training_context`). 실행 입력은 계속 `SpiritId` 하나라 정령 응답은 정령 조건에서만 나온다. SODA의 상식 관계(xAttr·xReact·xIntent·xWant·xNeed·xEffect)와 KorEmpathetic의 감정 라벨은 정령 판단 감독과 같은 `행동 판단 학습` 입력·`BEHAVIOR_FIELDS` JSON 출력(`general_judgment`)으로 학습해, 일반 관념에서 배운 상황→해석→감정→의도→행동 패턴이 같은 작업 형식으로 정령 판단에 이어지게 한다. 분할은 대화 ID 해시로 각 0.1%를 validation·test로 둔다. KorEmpatheticDialogues는 CC BY-NC 4.0이다.
 
 작성 연속 대화는 같은 파일의 `conversations`에 언어별 사용자·정령 발화 쌍으로 보관한다. 각 정령 답변을 하나의 감독 대상으로 삼고, 앞선 사용자와 정령의 발화는 순서대로 문맥에 넣는다. 직전 말에 맞춘 반응과 자기 지칭을 함께 학습하며, 새 과거 사건을 원본 사실로 만들지 않는다.
 
@@ -128,7 +133,9 @@ LiquidAI/LFM2.5-230M-Base에서 출발하는 텍스트 전용 230M 모델 하나
 
 ## 8. 코드 소유와 실행 순서
 
-공용 계약·경로는 common, 데이터 변환은 spirit_dataset/sft_dataset, 실제 학습은 training, 실행 모델·세션은 inference, 형식 변환은 export, 명령 진입점은 cli가 소유한다. 같은 규약·공용 타입을 명령마다 중복 구현하지 않는다.
+공용 계약·경로는 common, 데이터 변환은 spirit_dataset/sft_dataset, 실제 학습은 training, 실행 모델·세션은 inference, 형식 변환은 export, 브라우저 확인용 대화 화면은 web_chat, 명령 진입점은 cli가 소유한다. 같은 규약·공용 타입을 명령마다 중복 구현하지 않는다.
+
+`python -m cli web-chat [--port 8765] [--gguf] [--runtime <manifest>]`는 학습된 단일 모델을 한 번 올리고 표준 라이브러리 HTTP 서버로 `http://127.0.0.1:8765/`에 대화 화면을 연다. 화면에서 언어와 정령을 고르면 inference의 같은 `SpiritSession`이 열리고, 실제 모델에 들어가는 system 입력(`SpiritId: <정령 ID>`)과 대화 기록 전체를 함께 표시한다. 정령·언어마다 세션과 기록이 분리되며 별도 모델·프롬프트 경로를 만들지 않는다.
 
 소스 트리에서 실행할 때에는 그 프로젝트 루트가 기준이다. PC에 패키지로 설치하여 실행할 때에는 EVAI_PROJECT_ROOT에 모델과 데이터가 있는 배포 루트의 절대 경로를 지정한다. common/paths.py 한 곳에서 이를 해석하며 모델 파일을 패키지 설치 폴더로 복사하거나 다른 경로를 탐색해 대신 로드하지 않는다.
 
@@ -147,3 +154,6 @@ LiquidAI/LFM2.5-230M-Base에서 출발하는 텍스트 전용 230M 모델 하나
 최종 모델 하나에서 플랫폼 지정 정령의 1인칭, 개별 말투·성격·세계관·개인사 소유, 세 언어 응답, 일반 지식과 연속 대화의 정체성, 다른 정령 이름 등장 시 선택 정령 유지, 세션 간 혼입 방지, PC의 실제 최종 가중치 소비를 확인한다.
 
 loss나 이름 검사만으로 품질을 완성했다고 선언하지 않는다. 관찰한 실패는 수정 작업이며 미확인 품질을 완벽하다고 보장하지 않는다. 중간 설명으로 원래 작업을 끝내지 않는다.
+
+
+python -m cli web-chat --port 8765

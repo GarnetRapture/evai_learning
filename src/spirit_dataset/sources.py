@@ -16,6 +16,7 @@ from spirit_dataset.roster import SpiritIdentity
 from spirit_dataset.script import (
     SPEECH_UI_TYPES,
     ChoiceLayout,
+    ExchangeHistory,
     ScriptExchange,
     ScriptLine,
     ScriptWalker,
@@ -30,13 +31,16 @@ from spirit_dataset.situations import (
     HERO_DESC_SITUATIONS,
     LOBBY_GAME_FEATURE_TYPES,
     LOBBY_TYPE_SITUATIONS,
+    OUTING_GROUP_ROLE_MODULUS,
+    OUTING_GROUP_SITUATIONS,
+    OUTING_TALK_TYPES,
     TOWN_LOST_ITEM_OPENING_SITUATION,
     TRIP_KEYWORD_STRING_TABLE,
     TRIP_OPENING_SITUATION,
     TRIP_PERSONAL_KEYWORD_SITUATION,
     TRIP_SHARED_KEYWORD_SITUATION,
 )
-from spirit_dataset.text_cleaning import clean_game_text
+from spirit_dataset.text_cleaning import clean_game_text, is_localization_placeholder
 
 TOWN_LOST_ITEM_GROUP_COLUMNS: tuple[str, ...] = (
     "GroupStart",
@@ -56,6 +60,7 @@ class CanonicalExchange:
     love_level: int | None
     emotion: str | None
     previous_user_items: tuple[str, ...] = ()
+    earlier_exchanges: ExchangeHistory = ()
 
 
 @dataclass(frozen=True)
@@ -152,6 +157,18 @@ class SpiritSourceReader:
             )
             if keyword:
                 self._trip_keywords[row["No"]] = (row["HeroNo"], keyword)
+        keyword_groups = {
+            int(str(row["KeywordTalk"])) for rows in self._trip_rows.values() for row in rows
+        }
+        placeholders = ",".join("?" for _ in OUTING_TALK_TYPES)
+        self._outing_groups: dict[int, list[int]] = defaultdict(list)
+        for row in story.execute(
+            "SELECT DISTINCT HeroNo, GroupNo FROM Talk WHERE Hide = 0 AND TalkType IN "
+            f"({placeholders}) ORDER BY HeroNo, GroupNo",
+            OUTING_TALK_TYPES,
+        ):
+            if row["GroupNo"] not in keyword_groups:
+                self._outing_groups[row["HeroNo"]].append(row["GroupNo"])
         town = resources.enter_context(closing(open_tbl_database("town")))
         self._town_groups: dict[int, list[int]] = defaultdict(list)
         for row in town.execute("SELECT * FROM TownLostItem ORDER BY HeroNo, No"):
@@ -272,6 +289,7 @@ class SpiritSourceReader:
                 user_items=exchange.user_items,
                 previous_spirit_text=exchange.previous_spirit_text,
                 previous_user_items=exchange.previous_user_items,
+                earlier_exchanges=exchange.earlier_exchanges,
                 spirit_text=exchange.spirit_text,
                 love_level=love_level,
                 emotion=None,
@@ -367,6 +385,39 @@ class SpiritSourceReader:
             )
         return exchanges
 
+    def _outing(
+        self, identity: SpiritIdentity, skips: list[SourceSkip]
+    ) -> list[CanonicalExchange]:
+        walker = self._walker(identity, ChoiceLayout.GROUPED_BY_CHOICE_GROUP)
+        exchanges: list[CanonicalExchange] = []
+        for group_no in self._outing_groups.get(identity.hero_no, []):
+            lines = self._story_lines(group_no)
+            template = OUTING_GROUP_SITUATIONS.get(group_no % OUTING_GROUP_ROLE_MODULUS)
+            if template is None:
+                skips.extend(
+                    SourceSkip(
+                        SourceReference(SourceKind.TRIP, "Talk", (group_no, line.key)),
+                        ExclusionReason.UNVERIFIED_TRIGGER,
+                        "Outing group role is unverified",
+                        line.text,
+                    )
+                    for line in lines
+                )
+                continue
+            exchanges.extend(
+                self._from_script(
+                    self._parse_group(
+                        walker, lines, SourceKind.TRIP, "Talk", group_no, skips
+                    ),
+                    SourceKind.TRIP,
+                    "Talk",
+                    group_no,
+                    self._context(template),
+                    None,
+                )
+            )
+        return exchanges
+
     def _town(self, identity: SpiritIdentity, skips: list[SourceSkip]) -> list[CanonicalExchange]:
         walker = self._walker(identity, ChoiceLayout.GROUPED_BY_CHOICE_GROUP)
         exchanges: list[CanonicalExchange] = []
@@ -456,10 +507,7 @@ class SpiritSourceReader:
                 kind=SourceKind.BUBBLE, table=f"TalkBubble.{column}", keys=(identity.hero_no, value)
             )
             text = clean_game_text(self._resolver.resolve_current(BUBBLE_STRING_TABLE, value))
-            if text.startswith(f"말풍선_{identity.name}") or text in (
-                f"아르바이트 시작_{identity.name}",
-                f"아르바이트 종료_{identity.name}",
-            ):
+            if is_localization_placeholder(text):
                 skips.append(
                     SourceSkip(
                         source,
@@ -530,6 +578,7 @@ class SpiritSourceReader:
             *self._bubble(identity, skips),
             *self._evertalk(identity, skips),
             *self._trip(identity, skips),
+            *self._outing(identity, skips),
             *self._town(identity, skips),
             *self._story_exchanges(identity, skips),
         ]

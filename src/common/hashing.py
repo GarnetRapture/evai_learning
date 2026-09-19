@@ -11,6 +11,11 @@ def _file_digest(path: str, size: int, modified_ns: int, changed_ns: int) -> str
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def stable_index(identity: str, modulus: int) -> int:
+    digest = hashlib.sha256(identity.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") % modulus
+
+
 def compute_file_sha256(file_path: Path) -> str:
     path = file_path.resolve()
     stat = path.stat()

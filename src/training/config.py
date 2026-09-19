@@ -7,7 +7,7 @@ import yaml
 
 from common.errors import ConfigurationError
 from common.model_contract import CONTEXT_LENGTH
-from common.paths import CONFIG_DIR
+from common.paths import CONFIG_DIR, GENERAL_CORPUS_FILE
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,8 @@ class TrainingSettings:
     preparation_workers: int
     curriculum: str
     replay_ratio: float
+    replay_floor: int
+    general_corpus: bool
     save_interval_seconds: int = 300
 
 
@@ -89,6 +91,12 @@ def load_training_config(config_path: Path | None = None) -> TrainingConfig:
         raise ConfigurationError("Unknown single-model curriculum", path)
     if not 0 < training.replay_ratio <= 1:
         raise ConfigurationError("Dialogue replay ratio must be in (0, 1]", path)
+    if training.replay_floor < 0:
+        raise ConfigurationError("Per spirit-language replay floor must not be negative", path)
+    if training.general_corpus and not GENERAL_CORPUS_FILE.is_file():
+        raise ConfigurationError(
+            f"General corpus is enabled but not built: {GENERAL_CORPUS_FILE}", path
+        )
     if not 0 <= optimizer.warmup_ratio <= 1 or optimizer.learning_rate <= 0:
         raise ConfigurationError("Invalid optimizer schedule", path)
     if optimizer.max_grad_norm <= 0 or optimizer.weight_decay < 0:

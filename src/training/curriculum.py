@@ -41,6 +41,7 @@ def training_signature(
 def select_correction_curriculum(
     corpus: TrainingCorpus, curriculum: str, replay_ratio: float, rng: random.Random,
     consumed: set[str] | frozenset[str] = frozenset(),
+    replay_floor: int = 0,
 ) -> dict[str, int]:
     focused: dict[tuple[str, str], list[EncodedRecord]] = defaultdict(list)
     existing: dict[tuple[str, str], list[EncodedRecord]] = defaultdict(list)
@@ -69,7 +70,9 @@ def select_correction_curriculum(
         candidates = [
             record for record in existing[owner] if record.task is TrainingTask.PERSONA_SPEECH
         ]
-        count = min(len(candidates), math.ceil(len(corrections) * replay_ratio))
+        count = min(
+            len(candidates), max(math.ceil(len(corrections) * replay_ratio), replay_floor)
+        )
         selected.extend(corrections)
         selected.extend(rng.sample(candidates, count))
         replay_count += count

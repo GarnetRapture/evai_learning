@@ -169,6 +169,7 @@ def train_model(config: TrainingConfig) -> Path:
         config.training.max_length,
         config.training.token_memory_limit_mib * 2**20,
         config.training.preparation_workers,
+        config.training.general_corpus,
     )
     preparation_seconds = time.perf_counter() - started
     signature = training_signature(asdict(config), corpus.provenance, corpus.partition_moves)
@@ -198,7 +199,7 @@ def train_model(config: TrainingConfig) -> Path:
     previously_consumed = consumed - run_consumed
     selection = select_correction_curriculum(
         corpus, config.training.curriculum, config.training.replay_ratio, rng,
-        previously_consumed,
+        previously_consumed, config.training.replay_floor,
     )
     if not corpus.splits["train"]:
         print(

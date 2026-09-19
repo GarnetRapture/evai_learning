@@ -15,10 +15,17 @@ def _project_root() -> Path:
 PROJECT_ROOT: Path = _project_root()
 
 DATA_DIR: Path = PROJECT_ROOT / "data"
-TBL_DIR: Path = DATA_DIR / "tbl"
+TBL_DIR: Path = PROJECT_ROOT / "docs" / "tbl"
 SPIRIT_MEMORY_DIR: Path = DATA_DIR / "spirit_memory"
 SPIRIT_JUDGMENT_DIR: Path = DATA_DIR / "spirit_judgment"
 SPIRIT_LESSONS_FILE: Path = DATA_DIR / "spirit_lessons" / "curriculum.json"
+SPIRIT_LESSON_EXTENSIONS_DIR: Path = DATA_DIR / "spirit_lessons" / "extensions"
+EXTERNAL_DATA_DIR: Path = DATA_DIR / "external"
+KOREAN_ROLEPLAY_DIR: Path = EXTERNAL_DATA_DIR / "korean-role-playing"
+KOREAN_ADULT_ROLEPLAY_FILE: Path = EXTERNAL_DATA_DIR / "korean-adult-roleplay" / "RP_KO.jsonl"
+DIALOGUE_PATTERNS_DIR: Path = DATA_DIR / "dialogue_patterns"
+INTIMACY_PATTERNS_FILE: Path = DIALOGUE_PATTERNS_DIR / "intimacy_ko.jsonl"
+GENERAL_CORPUS_FILE: Path = DATA_DIR / "general_corpus" / "general_corpus.parquet"
 MODEL_DIR: Path = PROJECT_ROOT / "models" / "lfm2-230m"
 CONFIG_DIR: Path = PROJECT_ROOT / "configs"
 ARTIFACT_DIR: Path = PROJECT_ROOT / "artifacts"

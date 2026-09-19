@@ -12,6 +12,7 @@ from game_data.references import StringTableReferences
 from spirit_dataset.curriculum import SpiritGrade
 
 SLUG_INVALID_CHARACTER_PATTERN = re.compile(r"[^a-z0-9]+")
+UNRELEASED_SPIRIT_HERO_NOS: frozenset[int] = frozenset({2060, 3020, 5050})
 
 
 def roster_slugs() -> list[str]:
@@ -48,9 +49,12 @@ def load_spirit_roster(resolver: StringResolver, references: StringTableReferenc
     spirits: list[SpiritIdentity] = []
     used_slugs: dict[str, int] = {}
     with closing(open_tbl_database("hero")) as hero:
+        unreleased = sorted(UNRELEASED_SPIRIT_HERO_NOS)
         rows = hero.execute(
             "SELECT h.No, h.NameSno, h.GradeSno FROM Hero h WHERE h.IsCollectable = 1 "
-            "AND EXISTS (SELECT 1 FROM HeroDesc d WHERE d.HeroNo = h.No) ORDER BY h.No"
+            "AND (EXISTS (SELECT 1 FROM HeroDesc d WHERE d.HeroNo = h.No) "
+            f"OR h.No IN ({','.join('?' for _ in unreleased)})) ORDER BY h.No",
+            unreleased,
         ).fetchall()
     with closing(open_tbl_database("story")) as story:
         variants = {

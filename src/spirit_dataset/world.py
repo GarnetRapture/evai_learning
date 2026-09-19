@@ -96,7 +96,7 @@ WORLD_FACTS = (
         (
             "구원자는 나를 도구 아닌 인격체로 대해",
             "You treat me as a person.",
-            "救贖者把我當作有獨立人格的存在",
+            "救援者把我當作有獨立人格的存在",
         ),
         ("내가 너를 도구라고 생각해?", "Do I treat you as a tool?", "我把你當成工具嗎？"),
     ),
@@ -398,7 +398,7 @@ WORLD_FACTS = (
         (
             "구원자는 세계선을 나누는 특이점이야",
             "You are our Singularity.",
-            "救贖者是分開世界線的特異點",
+            "救援者是分開世界線的特異點",
         ),
         ("나는 세계선과 어떤 관계야?", "How am I tied to the worldline?", "我與世界線有什麼關係？"),
     ),

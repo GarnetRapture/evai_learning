@@ -16,6 +16,10 @@ from common.paths import (
     TBL_DIR,
     ensure_artifact_directories,
 )
+from external_dialogue.catalog import external_dialogue_hashes, load_external_conversations
+from external_dialogue.conversion import external_dialogue_records
+from external_dialogue.source import SourceConversation, assign_source_conversations
+from external_dialogue.speech_style import extract_speech_profile
 from game_data.localization import SourceLanguage, StringResolver
 from game_data.references import StringTableReferences
 from game_data.story import StoryRepository
@@ -30,7 +34,11 @@ from spirit_dataset.judgment import (
     split_with_judgments,
 )
 from spirit_dataset.language import LANGUAGE_CODES, render
-from spirit_dataset.lessons import canonical_conversation_lessons, persona_lessons
+from spirit_dataset.lessons import (
+    canonical_conversation_lessons,
+    lesson_extension_files,
+    persona_lessons,
+)
 from spirit_dataset.memory import (
     MIN_LOVE_LEVEL,
     PastMemory,
@@ -91,16 +99,17 @@ def render_prompt(
     record_memory: tuple[str, ...], exchange: CanonicalExchange
 ) -> list[SFTRecordTurn]:
     turns = [SFTRecordTurn(role=SpeakerRole.SYSTEM.value, content="\n".join(record_memory))]
+    earlier = list(exchange.earlier_exchanges)
     if exchange.previous_spirit_text is not None:
-        previous_user = (
-            "\n".join(exchange.previous_user_items)
-            if exchange.previous_user_items
-            else exchange.situation
-        )
-        turns.append(SFTRecordTurn(role=SpeakerRole.USER.value, content=previous_user))
+        earlier.append((exchange.previous_user_items, exchange.previous_spirit_text))
+    for user_items, spirit_text in earlier:
         turns.append(
-            SFTRecordTurn(role=SpeakerRole.ASSISTANT.value, content=exchange.previous_spirit_text)
+            SFTRecordTurn(
+                role=SpeakerRole.USER.value,
+                content="\n".join(user_items) if user_items else exchange.situation,
+            )
         )
+        turns.append(SFTRecordTurn(role=SpeakerRole.ASSISTANT.value, content=spirit_text))
     user_content = "\n".join(exchange.user_items) if exchange.user_items else exchange.situation
     turns.append(SFTRecordTurn(role=SpeakerRole.USER.value, content=user_content))
     return turns
@@ -131,6 +140,7 @@ class SpiritDatasetBuilder:
                 }
             )
             self._resources = resources.pop_all()
+        self._external_assignment: dict[str, list[SourceConversation]] = {}
 
     def close(self) -> None:
         self._resources.close()
@@ -307,7 +317,36 @@ class SpiritDatasetBuilder:
             for record in records
         ]
         conversations = canonical_conversation_lessons(profile, records)
-        records.extend(persona_lessons(profile, records))
+        authored = persona_lessons(profile, records)
+        if profile.language == "kr":
+            speech = extract_speech_profile(
+                dict.fromkeys(
+                    record.completion[0].content
+                    for record in (*records, *authored)
+                    if record.task is TrainingTask.PERSONA_SPEECH
+                )
+            )
+            external_records, external_exclusions = external_dialogue_records(
+                profile, speech, self._external_assignment.get(identity.slug, [])
+            )
+            authored.extend(external_records)
+            exclusions.extend(external_exclusions)
+        for lesson in authored:
+            content = "\n".join(turn.content for turn in lesson.completion)
+            classification = classify_dialogue_turn(
+                SpeakerRole.ASSISTANT, identity.name, content, CONTENT_SOURCE_TYPE
+            )
+            if classification is TurnClassification.ACCEPTED:
+                records.append(lesson)
+            else:
+                exclusions.append(
+                    SpiritExclusionRecord(
+                        reason=ExclusionReason.CONTENT_CLASSIFICATION,
+                        detail=classification.value,
+                        source=lesson.source,
+                        text_preview=content[:80],
+                    )
+                )
         records.extend(conversations)
         return records, exclusions, duplicates, past_memories
 
@@ -332,6 +371,10 @@ class SpiritDatasetBuilder:
             "name": profile.identity.name,
             "source_databases_sha256": self._source_hashes,
             "authored_lessons_sha256": compute_file_sha256(SPIRIT_LESSONS_FILE),
+            "lesson_extensions_sha256": {
+                path.name: compute_file_sha256(path) for path in lesson_extension_files()
+            },
+            "external_dialogue_sha256": external_dialogue_hashes(),
             "episodic_memory_file": memory_path.name if memory_path.exists() else None,
             "episodic_memory_sha256": (
                 compute_file_sha256(memory_path) if memory_path.exists() else None
@@ -429,6 +472,10 @@ class SpiritDatasetBuilder:
     def build_all(self, slugs: set[str] | None = None) -> SpiritDatasetBuildResult:
         ensure_artifact_directories()
         roster = load_spirit_roster(self._resolver, self._references)
+        self._profiles.bind_roster(roster.spirits)
+        self._external_assignment = assign_source_conversations(
+            [identity.slug for identity in roster.spirits], load_external_conversations()
+        )
         result = SpiritDatasetBuildResult(roster=roster)
         with ExitStack() as translations:
             builders = tuple(
@@ -443,6 +490,8 @@ class SpiritDatasetBuilder:
                 )
                 for language in ("en", "zh_tw")
             )
+            for builder in builders:
+                builder._profiles.bind_roster(roster.spirits)
             for identity in roster.spirits:
                 if slugs is not None and identity.slug not in slugs:
                     continue

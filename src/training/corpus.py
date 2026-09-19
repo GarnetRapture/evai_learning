@@ -15,16 +15,20 @@ import torch
 from common.errors import EvaiError
 from common.hashing import compute_file_sha256
 from common.model_contract import DATASET_VERSION, TRAINING_LANGUAGES
+from common.paths import GENERAL_CORPUS_FILE
+from general_corpus.records import training_records
+from general_corpus.store import read_general_corpus
 from sft_dataset.split import connected_indices
 from sft_dataset.storage import sft_split_path
 from spirit_dataset.curriculum import SpiritGrade, required_tasks
 from spirit_dataset.records import DIALOGUE_LESSON_PREFIX, SourceClass, TrainingTask
-from spirit_dataset.runtime_prompt import spirit_file_path
+from spirit_dataset.runtime_prompt import GENERAL_CORPUS_ID, spirit_file_path
 from training.data import example_fingerprint
 from training.records import IGNORE_INDEX, SHUFFLE_POOL_BATCHES, EncodedRecord
 from training.tokenization import ParallelTokenizer
 
 SPLITS = ("train", "validation", "test")
+GENERAL_PROGRESS_INTERVAL = 500000
 
 
 @dataclass
@@ -44,9 +48,12 @@ class TrainingCorpus:
         max_length: int,
         token_memory_limit_bytes: int,
         preparation_workers: int,
+        general_corpus: bool,
     ) -> TrainingCorpus:
         with closing(ParallelTokenizer(tokenizer, preparation_workers)) as encoder:
-            return cls._index(slugs, encoder, max_length, token_memory_limit_bytes)
+            return cls._index(
+                slugs, encoder, max_length, token_memory_limit_bytes, general_corpus
+            )
 
     @classmethod
     def _index(
@@ -55,6 +62,7 @@ class TrainingCorpus:
         encoder: ParallelTokenizer,
         max_length: int,
         token_memory_limit_bytes: int,
+        general_corpus: bool = False,
     ) -> TrainingCorpus:
         splits: dict[str, list[EncodedRecord]] = {split: [] for split in SPLITS}
         token_storage = array("i")
@@ -161,6 +169,14 @@ class TrainingCorpus:
                 splits[destination].append(location)
                 if original != destination:
                     moves[f"{original}->{destination}"] += 1
+        if general_corpus:
+            general_counts = cls._index_general(
+                encoder, max_length, token_memory_limit_bytes, token_storage, splits, excluded
+            )
+            provenance[GENERAL_CORPUS_ID] = {
+                "splits_sha256": {"corpus": compute_file_sha256(GENERAL_CORPUS_FILE)},
+                "records": general_counts,
+            }
         if any(not records for records in splits.values()):
             raise EvaiError("Joint curriculum requires independent train/validation/test events")
         for slug, source in provenance.items():
@@ -175,6 +191,60 @@ class TrainingCorpus:
             flush=True,
         )
         return cls(splits, provenance, dict(excluded), dict(moves), token_ids, max_length)
+
+    @staticmethod
+    def _index_general(
+        encoder: ParallelTokenizer,
+        max_length: int,
+        token_memory_limit_bytes: int,
+        token_storage: array,
+        splits: dict[str, list[EncodedRecord]],
+        excluded: Counter[str],
+    ) -> dict[str, int]:
+        counts: Counter[str] = Counter()
+        records = (
+            record
+            for conversation in read_general_corpus()
+            for record in training_records(conversation)
+        )
+        for prepared in encoder.stream(records, max_length, GENERAL_CORPUS_ID):
+            record, example = prepared.record, prepared.example
+            split = str(record["split"])
+            if example is None:
+                excluded[f"{GENERAL_CORPUS_ID}/{split}"] += 1
+                continue
+            targets = sum(label != IGNORE_INDEX for label in example.labels[1:])
+            if targets == 0:
+                excluded[f"{GENERAL_CORPUS_ID}/{split}"] += 1
+                continue
+            required_bytes = (len(token_storage) + len(example.input_ids)) * token_storage.itemsize
+            if required_bytes > token_memory_limit_bytes:
+                raise EvaiError(
+                    "Encoded corpus exceeds the configured CPU token memory limit: "
+                    f"{required_bytes} > {token_memory_limit_bytes} bytes"
+                )
+            splits[split].append(
+                EncodedRecord(
+                    GENERAL_CORPUS_ID,
+                    len(token_storage),
+                    len(example.input_ids),
+                    len(example.input_ids) - targets,
+                    example.language,
+                    False,
+                    False,
+                    False,
+                    fingerprint=example_fingerprint(
+                        example.input_ids, len(example.input_ids) - targets
+                    ),
+                    task=TrainingTask(example.task),
+                )
+            )
+            token_storage.extend(example.input_ids)
+            counts[f"{split}:{example.task}:{example.language}"] += 1
+            total = sum(counts.values())
+            if total % GENERAL_PROGRESS_INTERVAL == 0:
+                print(f"Indexed general corpus records: {total:,}", flush=True)
+        return dict(counts)
 
     def batches(
         self,

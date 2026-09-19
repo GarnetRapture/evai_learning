@@ -27,8 +27,23 @@ def spirit_file_path(slug: str) -> Path:
     return persona_dataset_dir(slug) / SPIRIT_FILE_NAME
 
 
+GENERAL_CORPUS_ID = "general_corpus"
+GENERAL_CONTEXT_HEADER = "Context: general\n"
+
+
 def spirit_selection_header(slug: str) -> str:
     return f"SpiritId: {slug}\n"
+
+
+def bind_general_context(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    body = [message for message in messages if message["role"] != SpeakerRole.SYSTEM.value]
+    return [{"role": SpeakerRole.SYSTEM.value, "content": GENERAL_CONTEXT_HEADER}, *body]
+
+
+def bind_training_context(messages: list[dict[str, str]], context_id: str) -> list[dict[str, str]]:
+    if context_id == GENERAL_CORPUS_ID:
+        return bind_general_context(messages)
+    return bind_spirit_identity(messages, context_id)
 
 
 def bind_spirit_identity(messages: list[dict[str, str]], slug: str) -> list[dict[str, str]]:

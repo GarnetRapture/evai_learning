@@ -1,4 +1,4 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
@@ -9,6 +9,9 @@ SITUATION_UI_TYPES: frozenset[str] = frozenset({"narration", "place"})
 PRESENT_UI_TYPE = "present"
 CHOICE_UI_TYPE = "choice"
 PLAYER_UI_TYPE = "player"
+EARLIER_EXCHANGE_LIMIT = 3
+
+type ExchangeHistory = tuple[tuple[tuple[str, ...], str], ...]
 CONVERTED_UI_TYPES: frozenset[str] = frozenset(
     {*SPEECH_UI_TYPES, *SITUATION_UI_TYPES, PRESENT_UI_TYPE, CHOICE_UI_TYPE, PLAYER_UI_TYPE}
 )
@@ -37,6 +40,7 @@ class ScriptExchange:
     spirit_lines: tuple[ScriptLine, ...]
     context_keys: tuple[int, ...]
     previous_user_items: tuple[str, ...] = ()
+    earlier_exchanges: ExchangeHistory = ()
 
     @property
     def spirit_text(self) -> str:
@@ -67,6 +71,14 @@ class ScriptState:
     previous: str | None = None
     buffer: tuple[ScriptLine, ...] = ()
     previous_items: tuple[str, ...] = ()
+    earlier_exchanges: ExchangeHistory = ()
+
+
+def unique_states(states: Iterable[ScriptState]) -> list[ScriptState]:
+    unique: dict[ScriptState, ScriptState] = {}
+    for state in states:
+        unique.setdefault(replace(state, earlier_exchanges=()), state)
+    return list(unique.values())
 
 
 def choice_item(text: str) -> str:
@@ -155,10 +167,18 @@ class ScriptWalker:
                 spirit_lines=state.buffer,
                 context_keys=state.keys,
                 previous_user_items=state.previous_items,
+                earlier_exchanges=state.earlier_exchanges,
             )
         )
+        earlier = (
+            state.earlier_exchanges
+            if state.previous is None
+            else (*state.earlier_exchanges, (state.previous_items, state.previous))
+        )
         return ScriptState(
-            previous=" ".join(line.text for line in state.buffer), previous_items=state.items
+            previous=" ".join(line.text for line in state.buffer),
+            previous_items=state.items,
+            earlier_exchanges=earlier[-EARLIER_EXCHANGE_LIMIT:],
         )
 
     def _walk(
@@ -171,7 +191,7 @@ class ScriptWalker:
         while index < len(lines):
             line = lines[index]
             if line.ui_type == CHOICE_UI_TYPE:
-                states = list(dict.fromkeys(self._flush(state, exchanges) for state in states))
+                states = unique_states(self._flush(state, exchanges) for state in states)
                 block_end = index
                 while block_end < len(lines) and lines[block_end].ui_type in (
                     CHOICE_UI_TYPE,
@@ -196,6 +216,7 @@ class ScriptWalker:
                             keys=(*state.keys, *option_keys),
                             previous=state.previous,
                             previous_items=state.previous_items,
+                            earlier_exchanges=state.earlier_exchanges,
                         )
                         for state in states
                     ]
@@ -210,7 +231,7 @@ class ScriptWalker:
                             exchanges,
                         )
                     joined.extend(option_states)
-                states = list(dict.fromkeys(joined))
+                states = unique_states(joined)
                 index = branch_end
                 continue
             if line.ui_type in SPEECH_UI_TYPES and self._is_spirit_line(line):
@@ -221,16 +242,14 @@ class ScriptWalker:
             else:
                 item = context_item(line)
                 if item is not None:
-                    states = list(
-                        dict.fromkeys(
-                            replace(
-                                flushed,
-                                items=(*flushed.items, item),
-                                keys=(*flushed.keys, line.key),
-                            )
-                            for state in states
-                            for flushed in (self._flush(state, exchanges),)
+                    states = unique_states(
+                        replace(
+                            flushed,
+                            items=(*flushed.items, item),
+                            keys=(*flushed.keys, line.key),
                         )
+                        for state in states
+                        for flushed in (self._flush(state, exchanges),)
                     )
             index += 1
         return states

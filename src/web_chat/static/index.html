@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EVAI 정령 대화</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <aside class="panel">
+      <h1 class="panel-title">EVAI 정령 대화</h1>
+      <label class="field">
+        <span class="field-label">언어</span>
+        <select id="language-select" class="field-input"></select>
+      </label>
+      <label class="field">
+        <span class="field-label">정령</span>
+        <input id="spirit-filter" class="field-input" type="search" placeholder="이름 또는 ID 검색" />
+        <select id="spirit-select" class="field-input spirit-list" size="14"></select>
+      </label>
+      <button id="new-session" class="action" type="button">새 대화 시작</button>
+      <section class="system-prompt">
+        <h2 class="section-title">모델 입력 system 프롬프트</h2>
+        <pre id="system-prompt" class="system-prompt-body"></pre>
+      </section>
+    </aside>
+    <main class="chat">
+      <header class="chat-header">
+        <span id="chat-title" class="chat-title">정령을 선택하고 새 대화를 시작하세요</span>
+        <span id="chat-status" class="chat-status"></span>
+      </header>
+      <ol id="message-list" class="message-list"></ol>
+      <form id="message-form" class="composer">
+        <textarea id="message-input" class="composer-input" rows="2" placeholder="메시지를 입력하세요" disabled></textarea>
+        <button id="send-button" class="action" type="submit" disabled>보내기</button>
+      </form>
+    </main>
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>

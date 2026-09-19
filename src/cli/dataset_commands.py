@@ -2,11 +2,14 @@ import argparse
 from contextlib import closing
 
 from cli.command_registry import SubParsers, add_command, print_banner
+from common.paths import GENERAL_CORPUS_FILE, INTIMACY_PATTERNS_FILE
+from external_dialogue.patterns import build_intimacy_patterns
+from general_corpus.store import write_general_corpus
 from spirit_dataset.builder import SpiritDatasetBuilder
 
 
 def cmd_build_dataset(args: argparse.Namespace) -> int:
-    print_banner("[build-dataset] Spirit-owned curriculum for the single model from data/tbl")
+    print_banner("[build-dataset] Spirit-owned curriculum for the single model from docs/tbl")
     slugs = set(args.spirit) if args.spirit else None
     with closing(SpiritDatasetBuilder()) as builder:
         result = builder.build_all(slugs)
@@ -43,11 +46,42 @@ def cmd_build_dataset(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_build_general_corpus(args: argparse.Namespace) -> int:
+    print_banner("[build-general-corpus] General dialogue and judgment patterns (ko/en/zh_tw)")
+    counts = write_general_corpus()
+    for key, count in sorted(counts.items()):
+        print(f"  * {key:<40} {count:>10,}")
+    print(f"* Conversations: {sum(counts.values()):,}")
+    print(f"* File: {GENERAL_CORPUS_FILE} ({GENERAL_CORPUS_FILE.stat().st_size:,} bytes)")
+    return 0
+
+
+def cmd_build_dialogue_patterns(args: argparse.Namespace) -> int:
+    print_banner("[build-dialogue-patterns] Shared intimacy patterns with spirit/savior slots")
+    stats = build_intimacy_patterns()
+    for key, count in sorted(stats.items()):
+        print(f"  * {key:<40} {count:>10,}")
+    print(f"* File: {INTIMACY_PATTERNS_FILE} ({INTIMACY_PATTERNS_FILE.stat().st_size:,} bytes)")
+    return 0
+
+
 def register(subparsers: SubParsers) -> None:
+    add_command(
+        subparsers,
+        "build-dialogue-patterns",
+        "Extract shared, setting-free dialogue patterns rendered later in each spirit's speech",
+        cmd_build_dialogue_patterns,
+    )
+    add_command(
+        subparsers,
+        "build-general-corpus",
+        "Convert downloaded general datasets into one compact training corpus",
+        cmd_build_general_corpus,
+    )
     command_parser = add_command(
         subparsers,
         "build-dataset",
-        "Build spirit-owned SFT records (memory + situation + canonical line) from data/tbl",
+        "Build spirit-owned SFT records (memory + situation + canonical line) from docs/tbl",
         cmd_build_dataset,
     )
     command_parser.add_argument(
