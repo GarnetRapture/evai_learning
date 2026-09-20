@@ -291,6 +291,91 @@ void sr_adamw_step(
     require_launched(launch_sr_adamw(buffers, settings, context), "sr_adamw_step");
 }
 
+void sr_adamw_8bit_step(
+    at::Tensor& param,
+    at::Tensor& grad,
+    at::Tensor& state1,
+    at::Tensor& state2,
+    at::Tensor& absmax1,
+    at::Tensor& absmax2,
+    const at::Tensor& quantiles1,
+    const at::Tensor& quantiles2,
+    at::Tensor& clip_state,
+    double max_norm,
+    double lr,
+    double beta1,
+    double beta2,
+    double eps,
+    double weight_decay,
+    double bias_correction1,
+    double bias_correction2_sqrt,
+    std::int64_t seed,
+    std::int64_t step)
+{
+    check_flat(param, param, "param");
+    check_flat(grad, param, "grad");
+    TORCH_CHECK(
+        state1.is_cuda() && state1.scalar_type() == at::kByte && state1.is_contiguous()
+            && state1.numel() == param.numel(),
+        "state1 must be a contiguous uint8 buffer matching param length");
+    TORCH_CHECK(
+        state2.is_cuda() && state2.scalar_type() == at::kByte && state2.is_contiguous()
+            && state2.numel() == param.numel(),
+        "state2 must be a contiguous uint8 buffer matching param length");
+    const std::int64_t expected_blocks =
+        (param.numel() + quantized_moment_block_size - 1) / quantized_moment_block_size;
+    TORCH_CHECK(
+        absmax1.is_cuda() && absmax1.scalar_type() == at::kFloat && absmax1.is_contiguous()
+            && absmax1.numel() == expected_blocks,
+        "absmax1 length must match the number of quantization blocks");
+    TORCH_CHECK(
+        absmax2.is_cuda() && absmax2.scalar_type() == at::kFloat && absmax2.is_contiguous()
+            && absmax2.numel() == expected_blocks,
+        "absmax2 length must match the number of quantization blocks");
+    TORCH_CHECK(
+        quantiles1.is_cuda() && quantiles1.scalar_type() == at::kFloat && quantiles1.is_contiguous()
+            && quantiles1.numel() == quantized_moment_codebook_size,
+        "quantiles1 must hold the 256-entry signed dynamic codebook");
+    TORCH_CHECK(
+        quantiles2.is_cuda() && quantiles2.scalar_type() == at::kFloat && quantiles2.is_contiguous()
+            && quantiles2.numel() == quantized_moment_codebook_size,
+        "quantiles2 must hold the 256-entry unsigned dynamic codebook");
+    TORCH_CHECK(clip_state.device() == param.device(), "clip_state must share the parameter device");
+    TORCH_CHECK(clip_state.scalar_type() == at::kFloat, "clip_state must be float32");
+    TORCH_CHECK(clip_state.numel() == 3 && clip_state.is_contiguous(), "clip_state must hold three floats");
+    const c10::cuda::CUDAGuard guard(param.device());
+    const LaunchContext context = launch_context();
+    const std::int64_t partial_count = quantized_adamw_reduce_blocks(context.multiprocessors);
+    at::Tensor partial = at::empty({partial_count}, clip_state.options());
+    const QuantizedAdamWBuffers buffers{
+        param.mutable_data_ptr(),
+        grad.mutable_data_ptr(),
+        state1.mutable_data_ptr<unsigned char>(),
+        state2.mutable_data_ptr<unsigned char>(),
+        absmax1.mutable_data_ptr<float>(),
+        absmax2.mutable_data_ptr<float>(),
+        quantiles1.const_data_ptr<float>(),
+        quantiles2.const_data_ptr<float>(),
+        param.numel(),
+        clip_state.mutable_data_ptr<float>(),
+        partial.mutable_data_ptr<float>(),
+        partial_count};
+    const AdamWSettings settings{
+        static_cast<float>(max_norm),
+        static_cast<float>(lr),
+        static_cast<float>(beta1),
+        static_cast<float>(beta2),
+        static_cast<float>(1.0 - beta1),
+        static_cast<float>(1.0 - beta2),
+        static_cast<float>(eps),
+        static_cast<float>(weight_decay),
+        static_cast<float>(bias_correction1),
+        static_cast<float>(bias_correction2_sqrt),
+        static_cast<std::uint64_t>(seed),
+        static_cast<std::uint64_t>(step)};
+    require_launched(launch_sr_adamw_8bit(buffers, settings, context), "sr_adamw_8bit_step");
+}
+
 }
 
 TORCH_LIBRARY(evai_kernels, library)
@@ -306,6 +391,11 @@ TORCH_LIBRARY(evai_kernels, library)
         "sr_adamw_step(Tensor(a!) param, Tensor(e!) grad, Tensor(b!) exp_avg, Tensor(c!) exp_avg_sq,"
         " Tensor(d!) clip_state, float max_norm, float lr, float beta1, float beta2, float eps,"
         " float weight_decay, float bias_correction1, float bias_correction2_sqrt, int seed, int step) -> ()");
+    library.def(
+        "sr_adamw_8bit_step(Tensor(a!) param, Tensor(b!) grad, Tensor(c!) state1, Tensor(d!) state2,"
+        " Tensor(e!) absmax1, Tensor(f!) absmax2, Tensor quantiles1, Tensor quantiles2,"
+        " Tensor(g!) clip_state, float max_norm, float lr, float beta1, float beta2, float eps,"
+        " float weight_decay, float bias_correction1, float bias_correction2_sqrt, int seed, int step) -> ()");
 }
 
 TORCH_LIBRARY_IMPL(evai_kernels, CUDA, library)
@@ -316,4 +406,5 @@ TORCH_LIBRARY_IMPL(evai_kernels, CUDA, library)
     library.impl("swiglu_backward", &evai_kernels::swiglu_backward);
     library.impl("rope_apply", &evai_kernels::rope_apply);
     library.impl("sr_adamw_step", &evai_kernels::sr_adamw_step);
+    library.impl("sr_adamw_8bit_step", &evai_kernels::sr_adamw_8bit_step);
 }

@@ -14,7 +14,7 @@ from evai_kernels.exceptions import (
     EvaiKernelsUnsupportedError,
 )
 from evai_kernels.extension import operators
-from evai_kernels.optimizer import StochasticRoundingAdamW
+from evai_kernels.optimizer import QuantizedMomentAdamW, StochasticRoundingAdamW
 from evai_kernels.rms_norm import RmsNormFunction, rms_norm
 from evai_kernels.rope import RopeFunction, apply_rotary_pos_emb
 from evai_kernels.swiglu import SwiGluFunction, swiglu
@@ -28,6 +28,7 @@ __all__ = [
     "EvaiKernelsNonFiniteError",
     "EvaiKernelsShapeError",
     "EvaiKernelsUnsupportedError",
+    "QuantizedMomentAdamW",
     "RmsNormFunction",
     "RopeFunction",
     "StochasticRoundingAdamW",

@@ -150,6 +150,29 @@ std::int64_t adamw_reduce_blocks(int multiprocessors);
 cudaError_t launch_sr_adamw(
     const AdamWBuffers& buffers, const AdamWSettings& settings, const LaunchContext& context);
 
+inline constexpr std::int64_t quantized_moment_block_size = 256;
+inline constexpr std::int64_t quantized_moment_codebook_size = 256;
+
+struct QuantizedAdamWBuffers {
+    void* weights;
+    void* grads;
+    unsigned char* state1;
+    unsigned char* state2;
+    float* absmax1;
+    float* absmax2;
+    const float* quantiles1;
+    const float* quantiles2;
+    std::int64_t numel;
+    float* clip_state;
+    float* partial;
+    std::int64_t partial_count;
+};
+
+std::int64_t quantized_adamw_reduce_blocks(int multiprocessors);
+
+cudaError_t launch_sr_adamw_8bit(
+    const QuantizedAdamWBuffers& buffers, const AdamWSettings& settings, const LaunchContext& context);
+
 const char* describe_cuda_error(cudaError_t status);
 
 }
