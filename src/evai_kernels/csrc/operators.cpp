@@ -18,7 +18,7 @@
 #include <optional>
 #include <tuple>
 
-namespace lfm2_kernels {
+namespace evai_kernels {
 namespace {
 
 StorageType storage_of(const at::Tensor& tensor)
@@ -28,7 +28,7 @@ StorageType storage_of(const at::Tensor& tensor)
     }
     TORCH_CHECK(
         tensor.scalar_type() == at::kFloat,
-        "lfm2_kernels operators support bfloat16 and float32 activations, got ",
+        "evai_kernels operators support bfloat16 and float32 activations, got ",
         tensor.scalar_type());
     return StorageType::float32;
 }
@@ -71,17 +71,17 @@ void check_flat(const at::Tensor& tensor, const at::Tensor& reference, const cha
         " must start on a 16 byte boundary for vectorised access");
 }
 
-std::int64_t check_rope(
-    const at::Tensor& input, const at::Tensor& cos, const at::Tensor& sin, std::int64_t heads,
-    std::int64_t seq_len)
+std::int64_t check_rope(const at::Tensor& input, const at::Tensor& cos, const at::Tensor& sin)
 {
     TORCH_CHECK(input.is_cuda(), "RoPE input must be a CUDA tensor");
-    TORCH_CHECK(input.dim() == 2 && input.is_contiguous(), "RoPE input must be a contiguous [rows, head_dim] tensor");
-    const std::int64_t head_dim = input.size(1);
+    TORCH_CHECK(input.dim() == 4, "RoPE input must be a [batch, heads, seq, head_dim] tensor");
+    TORCH_CHECK(input.stride(3) == 1, "RoPE input head_dim axis must be contiguous");
+    const std::int64_t head_dim = input.size(3);
     TORCH_CHECK(rope_supports_head_dim(head_dim), "RoPE supports head_dim 64, 128, or 256");
+    const std::int64_t batch = input.size(0);
+    const std::int64_t heads = input.size(1);
+    const std::int64_t seq_len = input.size(2);
     TORCH_CHECK(heads > 0 && seq_len > 0, "RoPE heads and seq_len must be positive");
-    TORCH_CHECK(input.size(0) % (heads * seq_len) == 0, "RoPE input rows must be batch * heads * seq_len");
-    const std::int64_t batch = input.size(0) / (heads * seq_len);
     TORCH_CHECK(cos.device() == input.device() && sin.device() == input.device(), "RoPE cos/sin must share the input device");
     TORCH_CHECK(cos.scalar_type() == input.scalar_type() && sin.scalar_type() == input.scalar_type(), "RoPE cos/sin dtype must match input");
     TORCH_CHECK(cos.is_contiguous() && sin.is_contiguous(), "RoPE cos/sin must be contiguous");
@@ -162,14 +162,22 @@ std::tuple<at::Tensor, at::Tensor> rms_norm_backward(
         columns,
         partial_rows};
     require_launched(launch_rms_norm_backward(request, context), "rms_norm_backward");
-    return {grad_input, grad_weight_partial.sum(0).to(weight.scalar_type())};
+    at::Tensor grad_weight = at::empty({columns}, weight.options());
+    const RmsNormGradWeightReduce reduce_request{
+        storage_of(weight),
+        grad_weight_partial.const_data_ptr<float>(),
+        grad_weight.mutable_data_ptr(),
+        partial_rows,
+        columns};
+    require_launched(
+        launch_rms_norm_grad_weight_reduce(reduce_request, context), "rms_norm_grad_weight_reduce");
+    return {grad_input, grad_weight};
 }
 
 at::Tensor rope_apply(
-    const at::Tensor& input, const at::Tensor& cos, const at::Tensor& sin, std::int64_t heads,
-    std::int64_t seq_len, bool negate_sin)
+    const at::Tensor& input, const at::Tensor& cos, const at::Tensor& sin, bool negate_sin)
 {
-    check_rope(input, cos, sin, heads, seq_len);
+    check_rope(input, cos, sin);
     const c10::cuda::CUDAGuard guard(input.device());
     at::Tensor output = at::empty(input.sizes(), input.options());
     if (input.numel() == 0) {
@@ -178,13 +186,12 @@ at::Tensor rope_apply(
     const RopeApply request{
         storage_of(input),
         input.const_data_ptr(),
+        Shape3{input.size(0), input.size(1), input.size(2)},
+        Shape3{input.stride(0), input.stride(1), input.stride(2)},
         cos.const_data_ptr(),
         sin.const_data_ptr(),
         output.mutable_data_ptr(),
-        input.size(0),
-        input.size(1),
-        heads,
-        seq_len,
+        input.size(3),
         negate_sin};
     require_launched(launch_rope_apply(request, launch_context()), "rope_apply");
     return output;
@@ -286,7 +293,7 @@ void sr_adamw_step(
 
 }
 
-TORCH_LIBRARY(lfm2_kernels, library)
+TORCH_LIBRARY(evai_kernels, library)
 {
     library.def("rms_norm_forward(Tensor input, Tensor weight, float epsilon) -> (Tensor, Tensor)");
     library.def(
@@ -294,19 +301,19 @@ TORCH_LIBRARY(lfm2_kernels, library)
         " -> (Tensor, Tensor)");
     library.def("swiglu_forward(Tensor gate, Tensor up) -> Tensor");
     library.def("swiglu_backward(Tensor grad_output, Tensor gate, Tensor up) -> (Tensor, Tensor)");
-    library.def("rope_apply(Tensor input, Tensor cos, Tensor sin, int heads, int seq_len, bool negate_sin) -> Tensor");
+    library.def("rope_apply(Tensor input, Tensor cos, Tensor sin, bool negate_sin) -> Tensor");
     library.def(
         "sr_adamw_step(Tensor(a!) param, Tensor(e!) grad, Tensor(b!) exp_avg, Tensor(c!) exp_avg_sq,"
         " Tensor(d!) clip_state, float max_norm, float lr, float beta1, float beta2, float eps,"
         " float weight_decay, float bias_correction1, float bias_correction2_sqrt, int seed, int step) -> ()");
 }
 
-TORCH_LIBRARY_IMPL(lfm2_kernels, CUDA, library)
+TORCH_LIBRARY_IMPL(evai_kernels, CUDA, library)
 {
-    library.impl("rms_norm_forward", &lfm2_kernels::rms_norm_forward);
-    library.impl("rms_norm_backward", &lfm2_kernels::rms_norm_backward);
-    library.impl("swiglu_forward", &lfm2_kernels::swiglu_forward);
-    library.impl("swiglu_backward", &lfm2_kernels::swiglu_backward);
-    library.impl("rope_apply", &lfm2_kernels::rope_apply);
-    library.impl("sr_adamw_step", &lfm2_kernels::sr_adamw_step);
+    library.impl("rms_norm_forward", &evai_kernels::rms_norm_forward);
+    library.impl("rms_norm_backward", &evai_kernels::rms_norm_backward);
+    library.impl("swiglu_forward", &evai_kernels::swiglu_forward);
+    library.impl("swiglu_backward", &evai_kernels::swiglu_backward);
+    library.impl("rope_apply", &evai_kernels::rope_apply);
+    library.impl("sr_adamw_step", &evai_kernels::sr_adamw_step);
 }

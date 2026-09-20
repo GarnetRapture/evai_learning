@@ -8,7 +8,7 @@
 
 #include "kernels.cuh"
 
-namespace lfm2_kernels {
+namespace evai_kernels {
 
 using Extents3 = cuda::std::dextents<std::int64_t, 3>;
 using Index2 = cuda::std::array<std::int64_t, 2>;

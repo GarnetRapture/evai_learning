@@ -39,7 +39,7 @@ include = [
     "general_corpus",
     "inference",
     "inspection",
-    "lfm2_kernels*",
+    "evai_kernels*",
     "persona",
     "sft_dataset",
     "spirit_dataset",
@@ -48,7 +48,7 @@ include = [
 ]
 
 [tool.setuptools.package-data]
-lfm2_kernels = ["py.typed", "lfm2_kernels_cuda.dll"]
+evai_kernels = ["py.typed", "evai_kernels_cuda.dll"]
 web_chat = ["static/*.html", "static/*.css", "static/*.js"]
 general_corpus = ["dictionary/*.txt", "dictionary/LICENSE"]
 

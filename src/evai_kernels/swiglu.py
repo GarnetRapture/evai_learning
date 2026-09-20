@@ -8,9 +8,9 @@ from typing import Any
 
 import torch
 
-from lfm2_kernels.device import require_same_cuda_device
-from lfm2_kernels.exceptions import Lfm2KernelsShapeError
-from lfm2_kernels.extension import operators
+from evai_kernels.device import require_same_cuda_device
+from evai_kernels.exceptions import EvaiKernelsShapeError
+from evai_kernels.extension import operators
 
 
 class SwiGluFunction(torch.autograd.Function):
@@ -31,11 +31,11 @@ class SwiGluFunction(torch.autograd.Function):
 
 def swiglu(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     if gate.shape != up.shape:
-        raise Lfm2KernelsShapeError(
+        raise EvaiKernelsShapeError(
             f"SwiGLU gate {tuple(gate.shape)} and up {tuple(up.shape)} must match"
         )
     if gate.dtype != up.dtype:
-        raise Lfm2KernelsShapeError(
+        raise EvaiKernelsShapeError(
             f"SwiGLU gate {gate.dtype} and up {up.dtype} must share a dtype"
         )
     require_same_cuda_device(gate, up)

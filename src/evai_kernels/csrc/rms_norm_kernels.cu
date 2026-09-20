@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace lfm2_kernels {
+namespace evai_kernels {
 namespace {
 
 constexpr int warp_lanes = 32;
@@ -106,7 +106,7 @@ __global__ void __launch_bounds__(block_threads) rms_norm_forward_kernel(RmsForw
 }
 
 template <typename Storage, int PerLane>
-__global__ void __launch_bounds__(block_threads) rms_norm_backward_kernel(RmsBackwardViews<Storage, PerLane> views)
+__global__ void __launch_bounds__(block_threads, 2) rms_norm_backward_kernel(RmsBackwardViews<Storage, PerLane> views)
 {
     constexpr std::int64_t columns = PerLane * warp_lanes;
     const WarpLane place = current_warp_lane();
@@ -144,6 +144,21 @@ __global__ void __launch_bounds__(block_threads) rms_norm_backward_kernel(RmsBac
             views.grad_weight_partial[Index2{place.warp, place.lane + (slot * warp_lanes)}] = weight_sums[slot];
         }
     }
+}
+
+template <typename Storage>
+__global__ void __launch_bounds__(256) rms_norm_grad_weight_reduce_kernel(
+    const float* partial, Storage* output, std::int64_t partial_rows, std::int64_t columns)
+{
+    const std::int64_t column = (static_cast<std::int64_t>(blockIdx.x) * blockDim.x) + threadIdx.x;
+    if (column >= columns) {
+        return;
+    }
+    float sum = 0.0F;
+    for (std::int64_t row = 0; row < partial_rows; ++row) {
+        sum += partial[static_cast<std::size_t>((row * columns) + column)];
+    }
+    output[static_cast<std::size_t>(column)] = from_float<Storage>(sum);
 }
 
 template <typename Body>
@@ -220,6 +235,27 @@ cudaError_t launch_rms_norm_backward(const RmsNormBackward& request, const Launc
         rms_norm_backward_kernel<Storage, PerLane><<<blocks, block_threads, 0, context.stream>>>(views);
         return cudaGetLastError();
     });
+}
+
+cudaError_t launch_rms_norm_grad_weight_reduce(
+    const RmsNormGradWeightReduce& request, const LaunchContext& context)
+{
+    constexpr unsigned int threads = 256;
+    const auto blocks =
+        static_cast<unsigned int>((request.columns + threads - 1) / static_cast<std::int64_t>(threads));
+    switch (request.storage) {
+    case StorageType::bfloat16:
+        rms_norm_grad_weight_reduce_kernel<__nv_bfloat16><<<blocks, threads, 0, context.stream>>>(
+            request.partial, static_cast<__nv_bfloat16*>(request.grad_weight), request.partial_rows,
+            request.columns);
+        break;
+    case StorageType::float32:
+        rms_norm_grad_weight_reduce_kernel<float><<<blocks, threads, 0, context.stream>>>(
+            request.partial, static_cast<float*>(request.grad_weight), request.partial_rows,
+            request.columns);
+        break;
+    }
+    return cudaGetLastError();
 }
 
 const char* describe_cuda_error(cudaError_t status)

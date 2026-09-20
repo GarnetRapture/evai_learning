@@ -10,7 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace lfm2_kernels {
+namespace evai_kernels {
 namespace {
 
 constexpr int block_threads = 256;

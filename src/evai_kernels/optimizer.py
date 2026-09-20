@@ -12,13 +12,13 @@ from collections.abc import Callable
 
 import torch
 
-from lfm2_kernels.device import require_same_cuda_device
-from lfm2_kernels.exceptions import (
-    Lfm2KernelsNonFiniteError,
-    Lfm2KernelsShapeError,
-    Lfm2KernelsUnsupportedError,
+from evai_kernels.device import require_same_cuda_device
+from evai_kernels.exceptions import (
+    EvaiKernelsNonFiniteError,
+    EvaiKernelsShapeError,
+    EvaiKernelsUnsupportedError,
 )
-from lfm2_kernels.extension import operators
+from evai_kernels.extension import operators
 
 FLAT_ALIGNMENT = 8
 
@@ -37,10 +37,10 @@ class StochasticRoundingAdamW(torch.optim.Optimizer):
     ) -> None:
         parameters = [parameter for parameter in module.parameters() if parameter.requires_grad]
         if not parameters:
-            raise Lfm2KernelsShapeError("The optimizer requires trainable parameters")
+            raise EvaiKernelsShapeError("The optimizer requires trainable parameters")
         foreign = sorted({str(parameter.dtype) for parameter in parameters} - {"torch.bfloat16"})
         if foreign:
-            raise Lfm2KernelsShapeError(f"All trainable parameters must be bfloat16: {foreign}")
+            raise EvaiKernelsShapeError(f"All trainable parameters must be bfloat16: {foreign}")
         device = require_same_cuda_device(*parameters)
         super().__init__(
             parameters, {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay}
@@ -82,7 +82,7 @@ class StochasticRoundingAdamW(torch.optim.Optimizer):
     @torch.no_grad()
     def step(self, closure: Callable[[], float] | None = None) -> float | None:
         if closure is not None:
-            raise Lfm2KernelsUnsupportedError("Closure re-evaluation is not supported")
+            raise EvaiKernelsUnsupportedError("Closure re-evaluation is not supported")
         self._steps += 1
         group = self.param_groups[0]
         beta1, beta2 = group["betas"]
@@ -107,6 +107,6 @@ class StochasticRoundingAdamW(torch.optim.Optimizer):
 
     def raise_if_nonfinite(self) -> None:
         if bool(self._clip_state[2].item()):
-            raise Lfm2KernelsNonFiniteError(
+            raise EvaiKernelsNonFiniteError(
                 "A gradient norm became non-finite; that update and later ones were withheld"
             )

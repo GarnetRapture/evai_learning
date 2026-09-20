@@ -13,9 +13,9 @@ from transformers.models.qwen3.modeling_qwen3 import (
     eager_attention_forward,
 )
 
-from lfm2_kernels.rms_norm import rms_norm
-from lfm2_kernels.rope import apply_rotary_pos_emb
-from lfm2_kernels.swiglu import swiglu
+from evai_kernels.rms_norm import rms_norm
+from evai_kernels.rope import apply_rotary_pos_emb
+from evai_kernels.swiglu import swiglu
 
 NORMS_PER_LAYER = 4
 FINAL_NORMS = 1

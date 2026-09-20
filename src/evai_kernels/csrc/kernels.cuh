@@ -6,7 +6,7 @@
 #include <array>
 #include <cstdint>
 
-namespace lfm2_kernels {
+namespace evai_kernels {
 
 enum class StorageType : std::uint8_t { float32, bfloat16 };
 
@@ -79,16 +79,26 @@ struct RmsNormBackward {
     std::int64_t partial_rows;
 };
 
+struct RmsNormGradWeightReduce {
+    StorageType storage;
+    const float* partial;
+    void* grad_weight;
+    std::int64_t partial_rows;
+    std::int64_t columns;
+};
+
+cudaError_t launch_rms_norm_grad_weight_reduce(
+    const RmsNormGradWeightReduce& request, const LaunchContext& context);
+
 struct RopeApply {
     StorageType storage;
     const void* input;
+    Shape3 outer_sizes;
+    Shape3 outer_strides;
     const void* cos;
     const void* sin;
     void* output;
-    std::int64_t rows;
     std::int64_t head_dim;
-    std::int64_t heads;
-    std::int64_t seq_len;
     bool negate_sin;
 };
 

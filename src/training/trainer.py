@@ -24,8 +24,8 @@ from common.model_contract import (
 )
 from common.model_storage import MODEL_STAGE, commit_pending_model, model_storage_lock
 from common.paths import MODEL_DIR, REPORTS_DIR
+from evai_kernels.optimizer import StochasticRoundingAdamW
 from inference.model_loader import load_causal_lm, load_tokenizer
-from lfm2_kernels.optimizer import StochasticRoundingAdamW
 from spirit_dataset.roster import roster_slugs
 from training.batching import prefetched_steps
 from training.config import TrainingConfig, TrainingSettings

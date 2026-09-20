@@ -4,7 +4,7 @@ operators."""
 from typing import Any
 
 from common.errors import EvaiError
-from lfm2_kernels.integration.qwen3 import (
+from evai_kernels.integration.qwen3 import (
     bind_fused_rms_norm,
     bind_fused_rope,
     bind_fused_swiglu,

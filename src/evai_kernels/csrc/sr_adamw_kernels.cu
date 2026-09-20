@@ -12,7 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace lfm2_kernels {
+namespace evai_kernels {
 namespace {
 
 constexpr int reduce_threads = 512;

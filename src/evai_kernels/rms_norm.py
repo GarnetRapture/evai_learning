@@ -9,9 +9,9 @@ from typing import Any
 
 import torch
 
-from lfm2_kernels.device import require_same_cuda_device
-from lfm2_kernels.exceptions import Lfm2KernelsShapeError
-from lfm2_kernels.extension import operators
+from evai_kernels.device import require_same_cuda_device
+from evai_kernels.exceptions import EvaiKernelsShapeError
+from evai_kernels.extension import operators
 
 
 class RmsNormFunction(torch.autograd.Function):
@@ -37,12 +37,12 @@ class RmsNormFunction(torch.autograd.Function):
 
 def rms_norm(input_tensor: torch.Tensor, weight: torch.Tensor, epsilon: float) -> torch.Tensor:
     if weight.ndim != 1 or input_tensor.shape[-1] != weight.shape[0]:
-        raise Lfm2KernelsShapeError(
+        raise EvaiKernelsShapeError(
             f"RMSNorm weight {tuple(weight.shape)} must match the last axis of "
             f"{tuple(input_tensor.shape)}"
         )
     if input_tensor.dtype != weight.dtype:
-        raise Lfm2KernelsShapeError(
+        raise EvaiKernelsShapeError(
             f"RMSNorm input {input_tensor.dtype} and weight {weight.dtype} must share a dtype"
         )
     require_same_cuda_device(input_tensor, weight)

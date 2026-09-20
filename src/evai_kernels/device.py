@@ -5,7 +5,7 @@ from functools import cache
 
 import torch
 
-from lfm2_kernels.exceptions import Lfm2KernelsDeviceError, Lfm2KernelsUnsupportedError
+from evai_kernels.exceptions import EvaiKernelsDeviceError, EvaiKernelsUnsupportedError
 
 MINIMUM_CAPABILITY = (8, 6)
 
@@ -30,18 +30,18 @@ def device_profile(index: int) -> DeviceProfile:
 def require_same_cuda_device(*tensors: torch.Tensor | None) -> torch.device:
     present = [tensor for tensor in tensors if tensor is not None]
     if not present:
-        raise Lfm2KernelsDeviceError("The CUDA operators require at least one operand")
+        raise EvaiKernelsDeviceError("The CUDA operators require at least one operand")
     device = present[0].device
     if device.type != "cuda":
-        raise Lfm2KernelsDeviceError(f"The CUDA operators require CUDA operands: {device}")
+        raise EvaiKernelsDeviceError(f"The CUDA operators require CUDA operands: {device}")
     for tensor in present[1:]:
         if tensor.device != device:
-            raise Lfm2KernelsDeviceError(
+            raise EvaiKernelsDeviceError(
                 f"Operands span several devices: {device} and {tensor.device}"
             )
     profile = device_profile(device.index or 0)
     if profile.capability < MINIMUM_CAPABILITY:
-        raise Lfm2KernelsUnsupportedError(
+        raise EvaiKernelsUnsupportedError(
             f"{profile.name} has compute capability {profile.capability}; "
             f"the library is built for {MINIMUM_CAPABILITY} and newer"
         )
