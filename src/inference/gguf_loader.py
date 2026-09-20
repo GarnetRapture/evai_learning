@@ -13,7 +13,7 @@ from common.hashing import compute_file_sha256
 from common.model_contract import MODEL_ID, read_training_contract, validate_model_config
 from common.model_storage import model_storage_lock
 from common.paths import GGUF_MODEL_FILE, MODEL_DIR
-from inference.lfm2_kernel import bind_cuda_operators
+from inference.cuda_operators import bind_cuda_operators
 
 DEQUANTIZE_ROWS = 256
 

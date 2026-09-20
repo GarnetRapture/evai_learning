@@ -28,39 +28,9 @@ StorageType storage_of(const at::Tensor& tensor)
     }
     TORCH_CHECK(
         tensor.scalar_type() == at::kFloat,
-        "lfm2_kernels short-convolution supports bfloat16 and float32 activations, got ",
+        "lfm2_kernels operators support bfloat16 and float32 activations, got ",
         tensor.scalar_type());
     return StorageType::float32;
-}
-
-void require_positive_strides(const at::Tensor& tensor, const char* name)
-{
-    for (std::int64_t axis = 0; axis < tensor.dim(); ++axis) {
-        TORCH_CHECK(tensor.stride(axis) > 0, name, " must have positive strides");
-    }
-}
-
-ConstTensor3 const_view(const at::Tensor& tensor, const char* name)
-{
-    require_positive_strides(tensor, name);
-    return ConstTensor3{
-        tensor.const_data_ptr(),
-        Shape3{tensor.size(0), tensor.size(1), tensor.size(2)},
-        Shape3{tensor.stride(0), tensor.stride(1), tensor.stride(2)}};
-}
-
-MutableTensor3 mutable_view(at::Tensor& tensor, const char* name)
-{
-    require_positive_strides(tensor, name);
-    return MutableTensor3{
-        tensor.mutable_data_ptr(),
-        Shape3{tensor.size(0), tensor.size(1), tensor.size(2)},
-        Shape3{tensor.stride(0), tensor.stride(1), tensor.stride(2)}};
-}
-
-ConstTensor3 absent_view()
-{
-    return ConstTensor3{nullptr, Shape3{0, 0, 0}, Shape3{1, 1, 1}};
 }
 
 LaunchContext launch_context()
@@ -72,40 +42,6 @@ LaunchContext launch_context()
 void require_launched(cudaError_t status, const char* operation)
 {
     TORCH_CHECK(status == cudaSuccess, operation, " failed to launch: ", describe_cuda_error(status));
-}
-
-void check_projection(const at::Tensor& projection)
-{
-    TORCH_CHECK(projection.is_cuda(), "projection must be a CUDA tensor");
-    TORCH_CHECK(projection.dim() == 3, "projection must be [batch, tokens, 3 * channels]");
-    TORCH_CHECK(projection.size(2) % 3 == 0, "projection channel axis must split into gate|carrier|value");
-    TORCH_CHECK(projection.stride(2) == 1, "projection must be contiguous along its channel axis");
-}
-
-ShortConvParameters check_parameters(
-    const at::Tensor& projection, const at::Tensor& weight, const std::optional<at::Tensor>& bias)
-{
-    const std::int64_t channels = projection.size(2) / 3;
-    TORCH_CHECK(weight.device() == projection.device(), "weight must share the projection device");
-    TORCH_CHECK(weight.scalar_type() == at::kFloat, "weight must be float32");
-    TORCH_CHECK(weight.dim() == 2 && weight.size(0) == channels, "weight must be [channels, taps]");
-    TORCH_CHECK(weight.is_contiguous(), "weight must be contiguous");
-    TORCH_CHECK(shortconv_supports_taps(weight.size(1)), "short-convolution supports 2 to 4 taps");
-    if (bias.has_value()) {
-        TORCH_CHECK(bias->device() == projection.device(), "bias must share the projection device");
-        TORCH_CHECK(bias->scalar_type() == at::kFloat, "bias must be float32");
-        TORCH_CHECK(bias->dim() == 1 && bias->size(0) == channels, "bias must be [channels]");
-        TORCH_CHECK(bias->is_contiguous(), "bias must be contiguous");
-    }
-    return ShortConvParameters{
-        weight.const_data_ptr<float>(), bias.has_value() ? bias->const_data_ptr<float>() : nullptr, weight.size(1)};
-}
-
-void check_companion(const at::Tensor& tensor, const at::Tensor& projection, const char* name)
-{
-    TORCH_CHECK(tensor.device() == projection.device(), name, " must share the projection device");
-    TORCH_CHECK(tensor.scalar_type() == projection.scalar_type(), name, " dtype must match projection");
-    TORCH_CHECK(tensor.dim() == 3, name, " must be three-dimensional");
 }
 
 std::int64_t check_rms_norm(const at::Tensor& input, const at::Tensor& weight)
@@ -129,107 +65,43 @@ void check_flat(const at::Tensor& tensor, const at::Tensor& reference, const cha
     TORCH_CHECK(tensor.scalar_type() == at::kBFloat16, name, " must be bfloat16");
     TORCH_CHECK(tensor.dim() == 1 && tensor.is_contiguous(), name, " must be one contiguous flat buffer");
     TORCH_CHECK(tensor.numel() == reference.numel(), name, " must match the parameter buffer length");
-}
-
-}
-
-at::Tensor shortconv_forward(
-    const at::Tensor& projection,
-    const at::Tensor& weight,
-    const std::optional<at::Tensor>& bias,
-    const std::optional<at::Tensor>& state)
-{
-    check_projection(projection);
-    const ShortConvParameters parameters = check_parameters(projection, weight, bias);
-    const c10::cuda::CUDAGuard guard(projection.device());
-    const std::int64_t batch = projection.size(0);
-    const std::int64_t seq_len = projection.size(1);
-    const std::int64_t channels = projection.size(2) / 3;
-    if (state.has_value()) {
-        check_companion(*state, projection, "state");
-        TORCH_CHECK(
-            state->size(0) == batch && state->size(1) == channels && state->size(2) >= parameters.taps - 1,
-            "state must be [batch, channels, history >= taps - 1]");
-    }
-    at::Tensor output = at::empty({batch, seq_len, channels}, projection.options());
-    if (batch == 0 || seq_len == 0) {
-        return output;
-    }
-    const LaunchContext context = launch_context();
-    const ShortConvForward request{
-        storage_of(projection),
-        const_view(projection, "projection"),
-        parameters,
-        state.has_value() ? const_view(*state, "state") : absent_view(),
-        mutable_view(output, "output"),
-        shortconv_chunk_tokens(batch, seq_len, channels, context.multiprocessors)};
-    require_launched(launch_shortconv_forward(request, context), "shortconv_forward");
-    return output;
-}
-
-std::tuple<at::Tensor, at::Tensor, at::Tensor> shortconv_backward(
-    const at::Tensor& projection,
-    const at::Tensor& weight,
-    const std::optional<at::Tensor>& bias,
-    const at::Tensor& grad_output)
-{
-    check_projection(projection);
-    const ShortConvParameters parameters = check_parameters(projection, weight, bias);
-    const c10::cuda::CUDAGuard guard(projection.device());
-    const std::int64_t batch = projection.size(0);
-    const std::int64_t seq_len = projection.size(1);
-    const std::int64_t channels = projection.size(2) / 3;
-    check_companion(grad_output, projection, "grad_output");
     TORCH_CHECK(
-        grad_output.size(0) == batch && grad_output.size(1) == seq_len && grad_output.size(2) == channels,
-        "grad_output must be [batch, tokens, channels]");
-
-    at::Tensor grad_projection = at::empty(projection.sizes(), projection.options());
-    const at::TensorOptions partial_options = weight.options();
-    if (batch == 0 || seq_len == 0) {
-        grad_projection.zero_();
-        return {
-            grad_projection,
-            at::zeros({channels, parameters.taps}, partial_options),
-            at::zeros({bias.has_value() ? channels : 0}, partial_options)};
-    }
-    const LaunchContext context = launch_context();
-    const std::int64_t chunk = shortconv_chunk_tokens(batch, seq_len, channels, context.multiprocessors);
-    const std::int64_t chunks = (seq_len + chunk - 1) / chunk;
-    at::Tensor grad_weight_partial = at::empty({batch * chunks, channels, parameters.taps}, partial_options);
-    at::Tensor grad_bias_partial =
-        at::empty({bias.has_value() ? batch * chunks : 0, bias.has_value() ? channels : 0}, partial_options);
-    const ShortConvBackward request{
-        storage_of(projection),
-        const_view(projection, "projection"),
-        parameters,
-        const_view(grad_output, "grad_output"),
-        mutable_view(grad_projection, "grad_projection"),
-        grad_weight_partial.mutable_data_ptr<float>(),
-        bias.has_value() ? grad_bias_partial.mutable_data_ptr<float>() : nullptr,
-        chunk,
-        chunks};
-    require_launched(launch_shortconv_backward(request, context), "shortconv_backward");
-    at::Tensor grad_weight = grad_weight_partial.sum(0);
-    at::Tensor grad_bias = bias.has_value() ? grad_bias_partial.sum(0) : grad_bias_partial.reshape({0});
-    return {grad_projection, grad_weight, grad_bias};
+        reinterpret_cast<std::uintptr_t>(tensor.const_data_ptr()) % (adamw_vector_width * sizeof(std::uint16_t)) == 0,
+        name,
+        " must start on a 16 byte boundary for vectorised access");
 }
 
-void shortconv_state_update(const at::Tensor& projection, at::Tensor& state, bool has_history)
+std::int64_t check_rope(
+    const at::Tensor& input, const at::Tensor& cos, const at::Tensor& sin, std::int64_t heads,
+    std::int64_t seq_len)
 {
-    check_projection(projection);
-    check_companion(state, projection, "state");
-    const c10::cuda::CUDAGuard guard(projection.device());
+    TORCH_CHECK(input.is_cuda(), "RoPE input must be a CUDA tensor");
+    TORCH_CHECK(input.dim() == 2 && input.is_contiguous(), "RoPE input must be a contiguous [rows, head_dim] tensor");
+    const std::int64_t head_dim = input.size(1);
+    TORCH_CHECK(rope_supports_head_dim(head_dim), "RoPE supports head_dim 64, 128, or 256");
+    TORCH_CHECK(heads > 0 && seq_len > 0, "RoPE heads and seq_len must be positive");
+    TORCH_CHECK(input.size(0) % (heads * seq_len) == 0, "RoPE input rows must be batch * heads * seq_len");
+    const std::int64_t batch = input.size(0) / (heads * seq_len);
+    TORCH_CHECK(cos.device() == input.device() && sin.device() == input.device(), "RoPE cos/sin must share the input device");
+    TORCH_CHECK(cos.scalar_type() == input.scalar_type() && sin.scalar_type() == input.scalar_type(), "RoPE cos/sin dtype must match input");
+    TORCH_CHECK(cos.is_contiguous() && sin.is_contiguous(), "RoPE cos/sin must be contiguous");
     TORCH_CHECK(
-        state.size(0) == projection.size(0) && state.size(1) == projection.size(2) / 3,
-        "state must be [batch, channels, taps]");
-    TORCH_CHECK(shortconv_supports_taps(state.size(2)), "state window must hold 2 to 4 taps");
-    if (projection.size(0) == 0) {
-        return;
-    }
-    const ShortConvStateUpdate request{
-        storage_of(projection), const_view(projection, "projection"), mutable_view(state, "state"), has_history};
-    require_launched(launch_shortconv_state_update(request, launch_context()), "shortconv_state_update");
+        cos.dim() == 2 && cos.size(0) == batch * seq_len && cos.size(1) == head_dim && cos.sizes() == sin.sizes(),
+        "RoPE cos/sin must be [batch * seq_len, head_dim]");
+    storage_of(input);
+    return head_dim;
+}
+
+void check_swiglu_pair(const at::Tensor& gate, const at::Tensor& up)
+{
+    TORCH_CHECK(gate.is_cuda(), "SwiGLU gate must be a CUDA tensor");
+    TORCH_CHECK(gate.is_contiguous() && up.is_contiguous(), "SwiGLU operands must be contiguous");
+    TORCH_CHECK(up.device() == gate.device(), "SwiGLU up must share the gate device");
+    TORCH_CHECK(up.scalar_type() == gate.scalar_type(), "SwiGLU up dtype must match gate");
+    TORCH_CHECK(up.sizes() == gate.sizes(), "SwiGLU up shape must match gate");
+    storage_of(gate);
+}
+
 }
 
 std::tuple<at::Tensor, at::Tensor> rms_norm_forward(
@@ -293,9 +165,75 @@ std::tuple<at::Tensor, at::Tensor> rms_norm_backward(
     return {grad_input, grad_weight_partial.sum(0).to(weight.scalar_type())};
 }
 
+at::Tensor rope_apply(
+    const at::Tensor& input, const at::Tensor& cos, const at::Tensor& sin, std::int64_t heads,
+    std::int64_t seq_len, bool negate_sin)
+{
+    check_rope(input, cos, sin, heads, seq_len);
+    const c10::cuda::CUDAGuard guard(input.device());
+    at::Tensor output = at::empty(input.sizes(), input.options());
+    if (input.numel() == 0) {
+        return output;
+    }
+    const RopeApply request{
+        storage_of(input),
+        input.const_data_ptr(),
+        cos.const_data_ptr(),
+        sin.const_data_ptr(),
+        output.mutable_data_ptr(),
+        input.size(0),
+        input.size(1),
+        heads,
+        seq_len,
+        negate_sin};
+    require_launched(launch_rope_apply(request, launch_context()), "rope_apply");
+    return output;
+}
+
+at::Tensor swiglu_forward(const at::Tensor& gate, const at::Tensor& up)
+{
+    check_swiglu_pair(gate, up);
+    const c10::cuda::CUDAGuard guard(gate.device());
+    at::Tensor output = at::empty(gate.sizes(), gate.options());
+    const std::int64_t numel = gate.numel();
+    if (numel == 0) {
+        return output;
+    }
+    const SwiGluForward request{
+        storage_of(gate), gate.const_data_ptr(), up.const_data_ptr(), output.mutable_data_ptr(), numel};
+    require_launched(launch_swiglu_forward(request, launch_context()), "swiglu_forward");
+    return output;
+}
+
+std::tuple<at::Tensor, at::Tensor> swiglu_backward(
+    const at::Tensor& grad_output, const at::Tensor& gate, const at::Tensor& up)
+{
+    check_swiglu_pair(gate, up);
+    TORCH_CHECK(grad_output.sizes() == gate.sizes(), "SwiGLU grad_output shape must match gate");
+    TORCH_CHECK(grad_output.scalar_type() == gate.scalar_type(), "SwiGLU grad_output dtype must match gate");
+    TORCH_CHECK(grad_output.is_contiguous(), "SwiGLU grad_output must be contiguous");
+    const c10::cuda::CUDAGuard guard(gate.device());
+    at::Tensor grad_gate = at::empty(gate.sizes(), gate.options());
+    at::Tensor grad_up = at::empty(gate.sizes(), gate.options());
+    const std::int64_t numel = gate.numel();
+    if (numel == 0) {
+        return {grad_gate, grad_up};
+    }
+    const SwiGluBackward request{
+        storage_of(gate),
+        gate.const_data_ptr(),
+        up.const_data_ptr(),
+        grad_output.const_data_ptr(),
+        grad_gate.mutable_data_ptr(),
+        grad_up.mutable_data_ptr(),
+        numel};
+    require_launched(launch_swiglu_backward(request, launch_context()), "swiglu_backward");
+    return {grad_gate, grad_up};
+}
+
 void sr_adamw_step(
     at::Tensor& param,
-    const at::Tensor& grad,
+    at::Tensor& grad,
     at::Tensor& exp_avg,
     at::Tensor& exp_avg_sq,
     at::Tensor& clip_state,
@@ -323,7 +261,7 @@ void sr_adamw_step(
     at::Tensor partial = at::empty({partial_count}, clip_state.options());
     const AdamWBuffers buffers{
         param.mutable_data_ptr(),
-        grad.const_data_ptr(),
+        grad.mutable_data_ptr(),
         exp_avg.mutable_data_ptr(),
         exp_avg_sq.mutable_data_ptr(),
         param.numel(),
@@ -350,27 +288,25 @@ void sr_adamw_step(
 
 TORCH_LIBRARY(lfm2_kernels, library)
 {
-    library.def("shortconv_forward(Tensor projection, Tensor weight, Tensor? bias, Tensor? state) -> Tensor");
-    library.def(
-        "shortconv_backward(Tensor projection, Tensor weight, Tensor? bias, Tensor grad_output)"
-        " -> (Tensor, Tensor, Tensor)");
-    library.def("shortconv_state_update(Tensor projection, Tensor(a!) state, bool has_history) -> ()");
     library.def("rms_norm_forward(Tensor input, Tensor weight, float epsilon) -> (Tensor, Tensor)");
     library.def(
         "rms_norm_backward(Tensor grad_output, Tensor input, Tensor weight, Tensor inverse_rms)"
         " -> (Tensor, Tensor)");
+    library.def("swiglu_forward(Tensor gate, Tensor up) -> Tensor");
+    library.def("swiglu_backward(Tensor grad_output, Tensor gate, Tensor up) -> (Tensor, Tensor)");
+    library.def("rope_apply(Tensor input, Tensor cos, Tensor sin, int heads, int seq_len, bool negate_sin) -> Tensor");
     library.def(
-        "sr_adamw_step(Tensor(a!) param, Tensor grad, Tensor(b!) exp_avg, Tensor(c!) exp_avg_sq,"
+        "sr_adamw_step(Tensor(a!) param, Tensor(e!) grad, Tensor(b!) exp_avg, Tensor(c!) exp_avg_sq,"
         " Tensor(d!) clip_state, float max_norm, float lr, float beta1, float beta2, float eps,"
         " float weight_decay, float bias_correction1, float bias_correction2_sqrt, int seed, int step) -> ()");
 }
 
 TORCH_LIBRARY_IMPL(lfm2_kernels, CUDA, library)
 {
-    library.impl("shortconv_forward", &lfm2_kernels::shortconv_forward);
-    library.impl("shortconv_backward", &lfm2_kernels::shortconv_backward);
-    library.impl("shortconv_state_update", &lfm2_kernels::shortconv_state_update);
     library.impl("rms_norm_forward", &lfm2_kernels::rms_norm_forward);
     library.impl("rms_norm_backward", &lfm2_kernels::rms_norm_backward);
+    library.impl("swiglu_forward", &lfm2_kernels::swiglu_forward);
+    library.impl("swiglu_backward", &lfm2_kernels::swiglu_backward);
+    library.impl("rope_apply", &lfm2_kernels::rope_apply);
     library.impl("sr_adamw_step", &lfm2_kernels::sr_adamw_step);
 }

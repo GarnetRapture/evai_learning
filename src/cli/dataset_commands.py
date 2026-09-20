@@ -3,6 +3,7 @@ from contextlib import closing
 
 from cli.command_registry import SubParsers, add_command, print_banner
 from common.paths import GENERAL_CORPUS_FILE, INTIMACY_PATTERNS_FILE
+from external_dialogue.pattern_audit import AUDIT_REPORT_FILE, audit_patterns
 from external_dialogue.patterns import build_intimacy_patterns
 from general_corpus.store import write_general_corpus
 from spirit_dataset.builder import SpiritDatasetBuilder
@@ -65,7 +66,29 @@ def cmd_build_dialogue_patterns(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit_dialogue_patterns(args: argparse.Namespace) -> int:
+    print_banner("[audit-dialogue-patterns] World, gender, name and policy conflicts")
+    report = audit_patterns()
+    print(f"  * totals {report['totals']}")
+    for check in report["checks"]:
+        print(f"  * {check['name']:<22} {check['count']:>7,}  {check['description']}")
+        for sample in check["samples"][: args.samples]:
+            role, pattern = sample.get("role", ""), sample.get("pattern", "")
+            print(f"      - [{role}] {sample['match']} | {pattern}")
+            if sample.get("original"):
+                print(f"        원문: {sample['original']}")
+    print(f"* Report: {AUDIT_REPORT_FILE}")
+    return 0
+
+
 def register(subparsers: SubParsers) -> None:
+    audit = add_command(
+        subparsers,
+        "audit-dialogue-patterns",
+        "Audit shared dialogue patterns for conflicts with the spirit world and policy",
+        cmd_audit_dialogue_patterns,
+    )
+    audit.add_argument("--samples", type=int, default=3)
     add_command(
         subparsers,
         "build-dialogue-patterns",

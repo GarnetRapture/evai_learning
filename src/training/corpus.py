@@ -251,19 +251,14 @@ class TrainingCorpus:
         split: str,
         batch_size: int,
         rng: random.Random | None = None,
-        skip_batches: int = 0,
     ) -> Iterator[list[EncodedRecord]]:
         ordered = list(self.splits[split])
         if rng is not None:
             rng.shuffle(ordered)
         pool_size = batch_size * SHUFFLE_POOL_BATCHES
-        batch_index = 0
         for start in range(0, len(ordered), pool_size):
             pool = sorted(ordered[start : start + pool_size], key=lambda item: item.token_count)
             batches = [pool[i : i + batch_size] for i in range(0, len(pool), batch_size)]
             if rng is not None:
                 rng.shuffle(batches)
-            for batch in batches:
-                if batch_index >= skip_batches:
-                    yield batch
-                batch_index += 1
+            yield from batches

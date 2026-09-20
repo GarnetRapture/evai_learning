@@ -25,6 +25,20 @@ Strided3<Element> strided_view(Element* data, const Shape3& sizes, const Shape3&
     return Strided3<Element>(data, cuda::std::layout_stride::mapping<Extents3>(extents, steps));
 }
 
+struct alignas(16) BFloat16Vector {
+    cuda::std::array<__nv_bfloat16, adamw_vector_width> lane;
+};
+
+__device__ __forceinline__ BFloat16Vector zero_vector()
+{
+    BFloat16Vector chunk{};
+#pragma unroll
+    for (int slot = 0; slot < adamw_vector_width; ++slot) {
+        chunk.lane[slot] = __float2bfloat16(0.0F);
+    }
+    return chunk;
+}
+
 __device__ __forceinline__ float to_float(float value)
 {
     return value;

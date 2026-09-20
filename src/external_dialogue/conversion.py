@@ -33,7 +33,7 @@ from spirit_dataset.script import EARLIER_EXCHANGE_LIMIT
 from spirit_dataset.situations import EVERTALK_OPENING_SITUATION
 
 NAME_PATTERN_CACHE_SIZE = 16384
-GRAMMATICAL_FOLLOWERS = "인이입으로에께처보만까부들야여나과와랑도을를은는의가다든일예라"
+GRAMMATICAL_FOLLOWERS = "인이입으로에께처보만까부들야여나과와랑도을를은는의가다든일예라안"
 CONCEPT_FOLLOWERS = GRAMMATICAL_FOLLOWERS + "해합하시전후용중안식풍류"
 PLURAL_PRONOUN_ENDINGS = "들희"
 COPULA_DROPPING_FOLLOWERS: tuple[str, ...] = ("다", "든", "라")

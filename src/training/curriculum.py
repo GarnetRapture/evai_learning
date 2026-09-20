@@ -40,7 +40,6 @@ def training_signature(
 
 def select_correction_curriculum(
     corpus: TrainingCorpus, curriculum: str, replay_ratio: float, rng: random.Random,
-    consumed: set[str] | frozenset[str] = frozenset(),
     replay_floor: int = 0,
 ) -> dict[str, int]:
     focused: dict[tuple[str, str], list[EncodedRecord]] = defaultdict(list)
@@ -61,7 +60,7 @@ def select_correction_curriculum(
         if previous is None or is_focus:
             unique[record.fingerprint] = (record, is_focus)
     for record, is_focus in unique.values():
-        destination = focused if is_focus and record.fingerprint not in consumed else existing
+        destination = focused if is_focus else existing
         destination[(record.spirit_id, record.language)].append(record)
     selected: list[EncodedRecord] = []
     replay_count = 0
@@ -82,9 +81,6 @@ def select_correction_curriculum(
         "replay_examples": replay_count,
         "selected_train": len(selected),
         "duplicate_examples_removed": len(corpus.splits["train"]) - len(unique),
-        "previously_consumed_examples": sum(
-            fingerprint in consumed for fingerprint in unique
-        ),
     }
     corpus.splits["train"] = selected
     for slug, source in corpus.provenance.items():

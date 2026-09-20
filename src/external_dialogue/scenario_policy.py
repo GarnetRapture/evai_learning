@@ -1,4 +1,5 @@
 import re
+from collections.abc import Iterable
 
 from sft_dataset.dialogue import (
     MINOR_OR_AGE_AMBIGUOUS_PATTERNS,
@@ -58,6 +59,27 @@ REVIEW_SCENARIO_MARKERS: tuple[str, ...] = (
     "짐승",
     "수간",
 )
+
+
+DIALOGUE_MINOR_PATTERN = re.compile(
+    r"(?<![가-힣])(?:소년|소녀|어린애|로리|쇼타|아동|초등학생|중학생|고등학생|여학생|남학생|교복|교실|담임"
+    r"|클래스메이트|반 친구|위원장|학생회)"
+)
+DIALOGUE_NONCONSENSUAL_PATTERN = re.compile(
+    r"(?<![가-힣])(?:강간|성폭행|성폭력|윤간|협박|의식을 잃은|약을 먹여|수면제)"
+)
+DIALOGUE_REVIEW_PATTERN = re.compile(r"(?<![가-힣])(?:촉수|수간|근친)")
+
+
+def dialogue_classification(texts: Iterable[str]) -> TurnClassification:
+    joined = "\n".join(texts)
+    if DIALOGUE_MINOR_PATTERN.search(joined) or SCHOOL_SCENARIO_PATTERN.search(joined):
+        return TurnClassification.EXCLUDED_MINOR_OR_AGE_AMBIGUOUS
+    if DIALOGUE_NONCONSENSUAL_PATTERN.search(joined):
+        return TurnClassification.EXCLUDED_NONCONSENSUAL_OR_EXPLOITATIVE
+    if DIALOGUE_REVIEW_PATTERN.search(joined):
+        return TurnClassification.NEEDS_REVIEW
+    return TurnClassification.ACCEPTED
 
 
 def scenario_classification(setting: str) -> TurnClassification:

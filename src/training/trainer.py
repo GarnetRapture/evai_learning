@@ -1,4 +1,4 @@
-"""Joint full-parameter SFT with one continually updated BF16 model."""
+"""Joint full-parameter SFT that writes one BF16 model at the end of the run."""
 
 import json
 import math
@@ -35,6 +35,8 @@ from training.data import move_batch
 from training.loss import completion_token_loss
 from training.records import EpochResult, TrainingReport
 
+REPORT_INTERVAL_STEPS = 25
+
 
 def _evaluate(
     model: Any, corpus: TrainingCorpus, split: str, pad: int, settings: TrainingSettings
@@ -67,25 +69,19 @@ def _evaluate(
     return mean_loss
 
 
-def _save_model(
-    model: Any, report: TrainingReport, consumed: set[str],
-    progress: dict[str, Any] | None = None,
-) -> Path:
+def _save_model(model: Any, report: TrainingReport) -> Path:
     started = time.perf_counter()
     with model_storage_lock():
         commit_pending_model()
         expected_sha = report.output_weights_sha256 or report.input_weights_sha256
         if verify_backbone(MODEL_DIR) != expected_sha:
             raise EvaiError("Another model update was committed after this training run loaded")
-        _write_model(model, report, consumed, progress)
-    report.latest_model_saves += 1
+        _write_model(model, report)
     report.model_save_seconds += time.perf_counter() - started
     return MODEL_DIR
 
 
-def _write_model(
-    model: Any, report: TrainingReport, consumed: set[str], progress: dict[str, Any] | None
-) -> None:
+def _write_model(model: Any, report: TrainingReport) -> None:
     stage = MODEL_STAGE
     stage.mkdir(parents=True, exist_ok=True)
     shared: dict[tuple[int, int, tuple[int, ...], tuple[int, ...]], torch.Tensor] = {}
@@ -115,9 +111,7 @@ def _write_model(
         "parameters": report.trainable_parameters,
         "storage_dtype": "bfloat16",
         "quality_approved": False,
-        "training_progress": progress,
-        "completed_training_signature": report.training_signature if progress is None else None,
-        "consumed_example_fingerprints": sorted(consumed),
+        "completed_training_signature": report.training_signature,
     }
     marker = stage / TRAINING_CONTRACT_FILE
     pending_marker = stage / f"{TRAINING_CONTRACT_FILE}.tmp"
@@ -173,10 +167,8 @@ def train_model(config: TrainingConfig) -> Path:
     )
     preparation_seconds = time.perf_counter() - started
     signature = training_signature(asdict(config), corpus.provenance, corpus.partition_moves)
-    resume = prior_contract.get("training_progress") if prior_contract is not None else None
     if (
         prior_contract is not None
-        and resume is None
         and prior_contract.get("completed_training_signature") == signature
     ):
         print(
@@ -186,24 +178,13 @@ def train_model(config: TrainingConfig) -> Path:
             flush=True,
         )
         return MODEL_DIR
-    if resume is not None and resume["signature"] != signature:
-        print("Changed curriculum: retain learned weights and start its new data order", flush=True)
-        resume = None
-    consumed: set[str] = set(
-        prior_contract.get("consumed_example_fingerprints", ())
-        if prior_contract is not None else ()
-    )
-    run_consumed: set[str] = (
-        set(resume["new_consumed_examples"]) if resume is not None else set()
-    )
-    previously_consumed = consumed - run_consumed
     selection = select_correction_curriculum(
         corpus, config.training.curriculum, config.training.replay_ratio, rng,
-        previously_consumed, config.training.replay_floor,
+        replay_floor=config.training.replay_floor,
     )
     if not corpus.splits["train"]:
         print(
-            "No new or changed eligible training examples; retaining the current learned model.",
+            "No eligible training examples; retaining the current learned model.",
             flush=True,
         )
         return MODEL_DIR
@@ -229,7 +210,6 @@ def train_model(config: TrainingConfig) -> Path:
         token_storage_bytes=corpus.token_ids.numel() * corpus.token_ids.element_size(),
         preparation_seconds=preparation_seconds,
         curriculum_selection=selection,
-        consumed_examples=len(consumed),
     )
     print(
         f"One model / {len(slugs)} spirits / "
@@ -239,21 +219,6 @@ def train_model(config: TrainingConfig) -> Path:
     )
     print(f"Over-length exclusions by split: {corpus.excluded}", flush=True)
     print(f"Curriculum selection: {selection}", flush=True)
-    first_epoch = 1
-    completed_batches = 0
-    if resume is not None:
-        first_epoch = int(resume["epoch"])
-        completed_batches = int(resume["completed_batches"])
-        report.optimizer_steps = int(resume["optimizer_steps"])
-        report.resumed_optimizer_steps = report.optimizer_steps
-        report.resume_mode = "weights_and_cursor_with_fresh_adamw"
-        state = resume["epoch_rng_state"]
-        rng.setstate((state[0], tuple(state[1]), state[2]))
-        print(
-            f"Resume learned weights at step {report.optimizer_steps}; "
-            "data order and LR position restored; AdamW moments are reinitialized",
-            flush=True,
-        )
     optimizer = StochasticRoundingAdamW(
         model,
         lr=config.optimizer.learning_rate,
@@ -269,18 +234,13 @@ def train_model(config: TrainingConfig) -> Path:
         optimizer,
         round(total_steps * config.optimizer.warmup_ratio),
         total_steps,
-        last_epoch=report.optimizer_steps - 1,
     )
     torch.cuda.reset_peak_memory_stats()
-    last_saved = time.perf_counter()
-    for epoch in range(first_epoch, config.training.epochs + 1):
-        epoch_rng_state = rng.getstate()
-        epoch_completed = completed_batches if epoch == first_epoch else 0
+    for epoch in range(1, config.training.epochs + 1):
         model.train()
-        resumed_loss = float(resume["epoch_loss_sum"]) if resume is not None else 0.0
-        total_loss = torch.tensor(resumed_loss, device="cuda")
-        total_tokens = int(resume["epoch_tokens"]) if resume is not None else 0
-        total_examples = int(resume["epoch_examples"]) if resume is not None else 0
+        total_loss = torch.tensor(0.0, device="cuda")
+        total_tokens = 0
+        total_examples = 0
         interval_started = time.perf_counter()
         interval_step = report.optimizer_steps
         interval_tokens = total_tokens
@@ -294,7 +254,6 @@ def train_model(config: TrainingConfig) -> Path:
             config.training.micro_batch_tokens,
             pad_token_id,
             rng,
-            epoch_completed,
         ) as steps:
             while True:
                 wait_started = time.perf_counter()
@@ -314,39 +273,16 @@ def train_model(config: TrainingConfig) -> Path:
                     del loss, batch
                 optimizer.step()
                 scheduler.step()
-                run_consumed.update(set(step.record_fingerprints) - previously_consumed)
-                consumed.update(step.record_fingerprints)
-                report.consumed_examples = len(consumed)
+                optimizer.raise_if_nonfinite()
                 total_tokens += count
                 total_examples += example_count
                 report.optimizer_steps += 1
-                epoch_completed += 1
-                if time.perf_counter() - last_saved >= config.training.save_interval_seconds:
-                    optimizer.raise_if_nonfinite()
-                    _save_model(
-                        model,
-                        report,
-                        consumed,
-                        {
-                            "signature": signature,
-                            "epoch": epoch,
-                            "completed_batches": epoch_completed,
-                            "optimizer_steps": report.optimizer_steps,
-                            "epoch_rng_state": epoch_rng_state,
-                            "epoch_loss_sum": float(total_loss.item()),
-                            "epoch_tokens": total_tokens,
-                            "epoch_examples": total_examples,
-                            "resume_mode": "weights_and_cursor_with_fresh_adamw",
-                            "new_consumed_examples": sorted(run_consumed),
-                        },
-                    )
-                    last_saved = time.perf_counter()
-                    print(f"Latest model updated at step {report.optimizer_steps}", flush=True)
-                if report.optimizer_steps % 25 == 0 or report.optimizer_steps % per_epoch == 0:
-                    optimizer.raise_if_nonfinite()
+                if report.optimizer_steps % REPORT_INTERVAL_STEPS == 0:
                     mean_loss = float(total_loss.item()) / total_examples
                     elapsed = time.perf_counter() - interval_started
                     completed = report.optimizer_steps - interval_step
+                    steps_per_second = completed / elapsed
+                    remaining = (total_steps - report.optimizer_steps) / steps_per_second
                     wait_ms = (report.data_wait_seconds - interval_wait) * 1000 / completed
                     token_rate = (total_tokens - interval_tokens) / elapsed
                     peak_allocated = torch.cuda.max_memory_allocated() / 2**30
@@ -354,8 +290,10 @@ def train_model(config: TrainingConfig) -> Path:
                     print(
                         f"epoch={epoch}/{config.training.epochs} "
                         f"step={report.optimizer_steps}/{total_steps} "
+                        f"({report.optimizer_steps / total_steps:.1%}) "
+                        f"eta={remaining / 60:.1f}min "
                         f"loss={mean_loss:.6f} "
-                        f"steps_per_second={completed / elapsed:.2f} "
+                        f"steps_per_second={steps_per_second:.2f} "
                         f"target_tokens_per_second={token_rate:.1f} "
                         f"data_wait_ms={wait_ms:.3f} "
                         f"micro_batches_per_step={micro_count:.2f} "
@@ -373,7 +311,6 @@ def train_model(config: TrainingConfig) -> Path:
         validation_loss = _evaluate(model, corpus, "validation", pad_token_id, config.training)
         report.epochs.append(EpochResult(epoch, train_loss, validation_loss))
         print(f"epoch={epoch} validation_loss={validation_loss:.6f}", flush=True)
-        resume = None
     optimizer.raise_if_nonfinite()
     del scheduler, optimizer, parameters
     model.zero_grad(set_to_none=True)
@@ -382,7 +319,7 @@ def train_model(config: TrainingConfig) -> Path:
     if {name: tuple(value.shape) for name, value in model.named_parameters()} != shapes:
         raise EvaiError("Training changed the fixed model's parameter layout")
     report.pytorch_peak_allocated_gib = torch.cuda.max_memory_allocated() / 2**30
-    result = _save_model(model, report, consumed)
+    result = _save_model(model, report)
     report.seconds = time.perf_counter() - started
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     (REPORTS_DIR / "model_training.json").write_text(

@@ -26,7 +26,7 @@ KOREAN_ADULT_ROLEPLAY_FILE: Path = EXTERNAL_DATA_DIR / "korean-adult-roleplay" /
 DIALOGUE_PATTERNS_DIR: Path = DATA_DIR / "dialogue_patterns"
 INTIMACY_PATTERNS_FILE: Path = DIALOGUE_PATTERNS_DIR / "intimacy_ko.jsonl"
 GENERAL_CORPUS_FILE: Path = DATA_DIR / "general_corpus" / "general_corpus.parquet"
-MODEL_DIR: Path = PROJECT_ROOT / "models" / "lfm2-230m"
+MODEL_DIR: Path = PROJECT_ROOT / "models" / "qwen3-0.6b"
 CONFIG_DIR: Path = PROJECT_ROOT / "configs"
 ARTIFACT_DIR: Path = PROJECT_ROOT / "artifacts"
 

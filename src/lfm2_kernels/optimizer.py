@@ -51,6 +51,11 @@ class StochasticRoundingAdamW(torch.optim.Optimizer):
             offsets.append(total)
             total += -(-parameter.numel() // FLAT_ALIGNMENT) * FLAT_ALIGNMENT
         self._weights = torch.zeros(total, dtype=torch.bfloat16, device=device)
+        with torch.no_grad():
+            for parameter, offset in zip(parameters, offsets, strict=True):
+                count = parameter.numel()
+                self._weights[offset : offset + count].copy_(parameter.reshape(-1))
+                parameter.data = self._weights[offset : offset + count].view_as(parameter)
         self._grads = torch.zeros_like(self._weights)
         self._exp_avg = torch.zeros_like(self._weights)
         self._exp_avg_sq = torch.zeros_like(self._weights)
@@ -58,8 +63,6 @@ class StochasticRoundingAdamW(torch.optim.Optimizer):
         with torch.no_grad():
             for parameter, offset in zip(parameters, offsets, strict=True):
                 count = parameter.numel()
-                self._weights[offset : offset + count].copy_(parameter.reshape(-1))
-                parameter.data = self._weights[offset : offset + count].view_as(parameter)
                 parameter.grad = self._grads[offset : offset + count].view_as(parameter)
         self._max_grad_norm = max_grad_norm
         self._seed = seed
@@ -74,7 +77,7 @@ class StochasticRoundingAdamW(torch.optim.Optimizer):
         return self._clip_state[1]
 
     def zero_grad(self, set_to_none: bool = True) -> None:
-        self._grads.zero_()
+        """The fused step clears the flat gradient buffer as it consumes it."""
 
     @torch.no_grad()
     def step(self, closure: Callable[[], float] | None = None) -> float | None:

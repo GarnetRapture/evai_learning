@@ -35,9 +35,8 @@ def _steps(
     micro_batch_tokens: int,
     pad_token_id: int,
     rng: random.Random | None,
-    skip_batches: int,
 ) -> Generator[TrainingStep]:
-    for records in corpus.batches(split, batch_size, rng, skip_batches):
+    for records in corpus.batches(split, batch_size, rng):
         yield TrainingStep(
             tuple(
                 collate(batch, corpus.token_ids, pad_token_id)
@@ -56,7 +55,6 @@ def prefetched_steps(
     micro_batch_tokens: int,
     pad_token_id: int,
     rng: random.Random | None = None,
-    skip_batches: int = 0,
 ) -> Iterator[Iterator[TrainingStep]]:
     producer = _steps(
         corpus,
@@ -66,7 +64,6 @@ def prefetched_steps(
         micro_batch_tokens,
         pad_token_id,
         rng,
-        skip_batches,
     )
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="training-data")
 

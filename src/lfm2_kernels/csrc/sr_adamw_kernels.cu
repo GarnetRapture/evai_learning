@@ -22,10 +22,10 @@ constexpr cuda::std::uint64_t variance_stream = 0x14057b7ef767814fULL;
 constexpr cuda::std::uint64_t seed_multiplier = 0x9e3779b97f4a7c15ULL;
 
 struct AdamWViews {
-    cuda::std::span<__nv_bfloat16> weights;
-    cuda::std::span<const __nv_bfloat16> grads;
-    cuda::std::span<__nv_bfloat16> exp_avg;
-    cuda::std::span<__nv_bfloat16> exp_avg_sq;
+    cuda::std::span<BFloat16Vector> weights;
+    cuda::std::span<BFloat16Vector> grads;
+    cuda::std::span<BFloat16Vector> exp_avg;
+    cuda::std::span<BFloat16Vector> exp_avg_sq;
     cuda::std::span<float> clip_state;
     cuda::std::span<float> partial;
 };
@@ -62,8 +62,12 @@ __global__ void __launch_bounds__(reduce_threads) gradient_square_kernel(AdamWVi
     float local = 0.0F;
     const auto count = static_cast<std::int64_t>(views.grads.size());
     for (std::int64_t index = first_index(reduce_threads); index < count; index += grid_stride(reduce_threads)) {
-        const float value = __bfloat162float(views.grads[static_cast<std::size_t>(index)]);
-        local += value * value;
+        const BFloat16Vector chunk = views.grads[static_cast<std::size_t>(index)];
+#pragma unroll
+        for (int slot = 0; slot < adamw_vector_width; ++slot) {
+            const float value = __bfloat162float(chunk.lane[slot]);
+            local += value * value;
+        }
     }
     const float total = block_sum(local, scratch);
     if (threadIdx.x == 0) {
@@ -92,27 +96,41 @@ __global__ void __launch_bounds__(reduce_threads) gradient_norm_kernel(AdamWView
 
 __global__ void __launch_bounds__(update_threads) sr_adamw_kernel(AdamWViews views, AdamWSettings settings)
 {
-    if (views.clip_state[2] != 0.0F) {
-        return;
-    }
+    const bool withheld = views.clip_state[2] != 0.0F;
     const float coefficient = views.clip_state[0];
     const float step_size = settings.lr / settings.bias_correction1;
     const float decay = 1.0F - (settings.lr * settings.weight_decay);
     const cuda::std::uint64_t base = (settings.seed * seed_multiplier) ^ (settings.step << 40U);
     const auto count = static_cast<std::int64_t>(views.weights.size());
     for (std::int64_t index = first_index(update_threads); index < count; index += grid_stride(update_threads)) {
-        const auto slot = static_cast<std::size_t>(index);
-        const float gradient = __bfloat162float(views.grads[slot]) * coefficient;
-        const float first =
-            (settings.beta1 * __bfloat162float(views.exp_avg[slot])) + (settings.one_minus_beta1 * gradient);
-        const float second = (settings.beta2 * __bfloat162float(views.exp_avg_sq[slot]))
-            + (settings.one_minus_beta2 * gradient * gradient);
-        const float denominator = (sqrtf(second) / settings.bias_correction2_sqrt) + settings.eps;
-        const float updated = (__bfloat162float(views.weights[slot]) * decay) - (step_size * first / denominator);
-        const cuda::std::uint64_t key = base ^ static_cast<cuda::std::uint64_t>(index);
-        views.weights[slot] = round_stochastic(updated, mix_bits(key));
-        views.exp_avg[slot] = round_stochastic(first, mix_bits(key ^ moment_stream));
-        views.exp_avg_sq[slot] = round_stochastic(second, mix_bits(key ^ variance_stream));
+        const auto position = static_cast<std::size_t>(index);
+        const BFloat16Vector gradients = views.grads[position];
+        views.grads[position] = zero_vector();
+        if (withheld) {
+            continue;
+        }
+        BFloat16Vector weights = views.weights[position];
+        BFloat16Vector moments = views.exp_avg[position];
+        BFloat16Vector variances = views.exp_avg_sq[position];
+        const std::int64_t origin = index * adamw_vector_width;
+#pragma unroll
+        for (int slot = 0; slot < adamw_vector_width; ++slot) {
+            const float gradient = __bfloat162float(gradients.lane[slot]) * coefficient;
+            const float first =
+                (settings.beta1 * __bfloat162float(moments.lane[slot])) + (settings.one_minus_beta1 * gradient);
+            const float second = (settings.beta2 * __bfloat162float(variances.lane[slot]))
+                + (settings.one_minus_beta2 * gradient * gradient);
+            const float denominator = (sqrtf(second) / settings.bias_correction2_sqrt) + settings.eps;
+            const float updated =
+                (__bfloat162float(weights.lane[slot]) * decay) - (step_size * first / denominator);
+            const cuda::std::uint64_t key = base ^ static_cast<cuda::std::uint64_t>(origin + slot);
+            weights.lane[slot] = round_stochastic(updated, mix_bits(key));
+            moments.lane[slot] = round_stochastic(first, mix_bits(key ^ moment_stream));
+            variances.lane[slot] = round_stochastic(second, mix_bits(key ^ variance_stream));
+        }
+        views.weights[position] = weights;
+        views.exp_avg[position] = moments;
+        views.exp_avg_sq[position] = variances;
     }
 }
 
@@ -125,12 +143,12 @@ std::int64_t adamw_reduce_blocks(int multiprocessors)
 
 cudaError_t launch_sr_adamw(const AdamWBuffers& buffers, const AdamWSettings& settings, const LaunchContext& context)
 {
-    const auto count = static_cast<std::size_t>(buffers.numel);
+    const auto count = static_cast<std::size_t>(buffers.numel / adamw_vector_width);
     const AdamWViews views{
-        cuda::std::span<__nv_bfloat16>(static_cast<__nv_bfloat16*>(buffers.weights), count),
-        cuda::std::span<const __nv_bfloat16>(static_cast<const __nv_bfloat16*>(buffers.grads), count),
-        cuda::std::span<__nv_bfloat16>(static_cast<__nv_bfloat16*>(buffers.exp_avg), count),
-        cuda::std::span<__nv_bfloat16>(static_cast<__nv_bfloat16*>(buffers.exp_avg_sq), count),
+        cuda::std::span<BFloat16Vector>(static_cast<BFloat16Vector*>(buffers.weights), count),
+        cuda::std::span<BFloat16Vector>(static_cast<BFloat16Vector*>(buffers.grads), count),
+        cuda::std::span<BFloat16Vector>(static_cast<BFloat16Vector*>(buffers.exp_avg), count),
+        cuda::std::span<BFloat16Vector>(static_cast<BFloat16Vector*>(buffers.exp_avg_sq), count),
         cuda::std::span<float>(buffers.clip_state, 3),
         cuda::std::span<float>(buffers.partial, static_cast<std::size_t>(buffers.partial_count))};
     const auto reduce_blocks = static_cast<unsigned int>(buffers.partial_count);

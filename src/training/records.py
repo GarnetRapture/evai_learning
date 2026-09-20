@@ -115,12 +115,8 @@ class TrainingReport:
     preparation_seconds: float = 0.0
     data_wait_seconds: float = 0.0
     train_micro_batches: int = 0
-    resume_mode: str | None = None
-    resumed_optimizer_steps: int = 0
-    latest_model_saves: int = 0
     model_save_seconds: float = 0.0
     quality_approved: bool = False
-    consumed_examples: int = 0
     output_weights_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:

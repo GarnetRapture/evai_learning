@@ -20,10 +20,19 @@ KOREAN_ADULT_ROLEPLAY_SOURCE = SourceDataset(
     subset="rp_ko",
     path=KOREAN_ADULT_ROLEPLAY_FILE,
 )
-SPEAKER_PATTERN = re.compile(r"^\s*([^「(（\n]{1,24}?)\s*「")
+SPEAKER_PATTERN = re.compile(r"^\s*([^「」()（）\n]{1,24}?)\s*(?=[「(（])")
+TRAILING_GLOSS_PATTERN = re.compile(r"(?<=[가-힣])[(（][^()（）「」]{1,4}[)）](?![가-힣])")
+LEADING_GLOSS_PATTERN = re.compile(r"[(（]([^()（）「」]{1,4})[)）](?=[가-힣])")
+ANNOTATION_PATTERN = re.compile(r"\s*[(（]※[^()（）]*[)）]")
+OPEN_QUOTE = "「"
+CLOSE_QUOTE = "」"
+DOMINANT_SPEAKER_SHARE = 0.5
 TURN_PART_PATTERN = re.compile(r"「([^」]*)(?:」|$)|[(（]([^)）]*)[)）]|([^「(（]+)")
 QUOTE_PART_PATTERN = re.compile(r"[(（]([^)）]*)[)）]|([^(（]+)")
-HONORIFIC_SUFFIXES: tuple[str, ...] = ("선생님", "선배", "씨", "님", "군", "양", "짱", "쨩", "상")
+HONORIFIC_SUFFIXES: tuple[str, ...] = (
+    "선생님", "선배", "씨", "님", "군", "양", "짱", "쨩", "상",
+    "공주", "왕녀", "왕자", "여왕", "마왕", "용사", "부장", "과장", "사장", "회장", "박사",
+)
 MIN_NAME_PART_LENGTH = 2
 SCENE_HEADER_MARKER = "장면"
 SYSTEM_ROLE = "system"
@@ -79,11 +88,47 @@ def setting_genders(setting: str) -> dict[str, CharacterGender]:
     return {role: _line_gender(roles.get(role, "")) for role in SPEAKER_ROLES}
 
 
-def parse_adult_roleplay_turn(role: str, content: str) -> tuple[str | None, SourceTurn]:
-    speaker_match = SPEAKER_PATTERN.match(content)
-    speaker = speaker_match.group(1).strip() if speaker_match else None
-    body = content[speaker_match.end() - 1 :] if speaker_match else content
-    narrated = "「" in body
+def flatten_nested_quotes(content: str) -> str:
+    depth = 0
+    characters: list[str] = []
+    for character in content:
+        if character == OPEN_QUOTE:
+            depth += 1
+            if depth > 1:
+                continue
+        elif character == CLOSE_QUOTE and depth > 0:
+            depth -= 1
+            if depth > 0:
+                continue
+        characters.append(character)
+    return "".join(characters)
+
+
+def normalize_translation_glosses(content: str) -> str:
+    unwrapped = LEADING_GLOSS_PATTERN.sub(
+        r"\1", TRAILING_GLOSS_PATTERN.sub("", ANNOTATION_PATTERN.sub("", content))
+    )
+    return flatten_nested_quotes(unwrapped)
+
+
+def speaker_candidate(content: str) -> str | None:
+    match = SPEAKER_PATTERN.match(normalize_translation_glosses(content))
+    return match.group(1).strip() if match else None
+
+
+def parse_adult_roleplay_turn(
+    role: str, content: str, known_speakers: frozenset[str] | None = None
+) -> tuple[str | None, SourceTurn]:
+    normalized = normalize_translation_glosses(content)
+    match = SPEAKER_PATTERN.match(normalized)
+    candidate = match.group(1).strip() if match else None
+    speaker = (
+        candidate
+        if match and candidate and (known_speakers is None or candidate in known_speakers)
+        else None
+    )
+    body = normalized[match.end() :] if match and speaker else normalized
+    narrated = OPEN_QUOTE in body
     segments: list[TurnSegment] = []
     for quote, action, plain in TURN_PART_PATTERN.findall(body):
         if quote:
@@ -132,15 +177,18 @@ def load_korean_adult_roleplay_conversations() -> list[SourceConversation]:
             setting = "\n".join(
                 message["content"] for message in messages if message["role"] == SYSTEM_ROLE
             )
-            parsed = [
-                parse_adult_roleplay_turn(message["role"], message["content"])
-                for message in messages
-                if message["role"] in SPEAKER_ROLES
-            ]
+            spoken = [message for message in messages if message["role"] in SPEAKER_ROLES]
             speakers = {
-                role: Counter(speaker for speaker, turn in parsed if turn.role == role and speaker)
+                role: dominant_speaker(
+                    [
+                        speaker_candidate(message["content"])
+                        for message in spoken
+                        if message["role"] == role
+                    ]
+                )
                 for role in SPEAKER_ROLES
             }
+            known = frozenset(name for name in speakers.values() if name)
             conversations.append(
                 SourceConversation(
                     dataset=KOREAN_ADULT_ROLEPLAY_SOURCE,
@@ -148,14 +196,21 @@ def load_korean_adult_roleplay_conversations() -> list[SourceConversation]:
                     topic=scene_description(setting),
                     setting=setting,
                     names=SourceNames(
-                        character=name_forms(_most_common(speakers["assistant"])),
-                        user=name_forms(_most_common(speakers["user"])),
+                        character=name_forms(speakers["assistant"]),
+                        user=name_forms(speakers["user"]),
                     ),
-                    turns=tuple(turn for _, turn in parsed),
+                    turns=tuple(
+                        parse_adult_roleplay_turn(message["role"], message["content"], known)[1]
+                        for message in spoken
+                    ),
                 )
             )
     return conversations
 
 
-def _most_common(counter: Counter[str]) -> str | None:
-    return counter.most_common(1)[0][0] if counter else None
+def dominant_speaker(candidates: list[str | None]) -> str | None:
+    counts = Counter(candidate for candidate in candidates if candidate)
+    if not counts:
+        return None
+    name, count = counts.most_common(1)[0]
+    return name if count >= DOMINANT_SPEAKER_SHARE * len(candidates) else None

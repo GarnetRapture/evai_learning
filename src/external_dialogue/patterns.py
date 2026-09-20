@@ -2,7 +2,7 @@ import json
 import os
 import re
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -18,11 +18,12 @@ from external_dialogue.adult_roleplay import (
 from external_dialogue.conversion import (
     CONCEPT_FOLLOWERS,
     GRAMMATICAL_FOLLOWERS,
-    compile_names,
+    SPIRIT_ONLY_MARKERS,
     compile_terms,
+    mentions_real_world,
     substitute_names,
 )
-from external_dialogue.scenario_policy import scenario_classification
+from external_dialogue.scenario_policy import dialogue_classification, scenario_classification
 from external_dialogue.source import (
     SegmentKind,
     SourceConversation,
@@ -135,11 +136,23 @@ SCENE_SITUATION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 DEFAULT_TEMPLATE_SITUATION = LOBBY_TYPE_SITUATIONS["Normal"]
 SPIRIT_KIND = "정령"
+ARTIFICIAL_SPIRIT = "인공 정령"
+DUPLICATE_SLOT_PATTERN = re.compile(r"(\{spirit\}|\{savior\})(?:\s*\1)+")
+SLOT_LOOKAHEAD = r"\{(?:spirit|savior)\}"
+NAME_FOLLOWERS = GRAMMATICAL_FOLLOWERS + "아"
+SELF_REFERENCE_WORD = "나"
+SELF_NAMING_PATTERNS: dict[str, re.Pattern[str]] = {
+    "assistant": re.compile(r"(^|[.!?…♡♥~]\s*)\{spirit\}(?=\s*,)"),
+    "user": re.compile(r"(^|[.!?…♡♥~]\s*)\{savior\}(?=\s*,)"),
+}
+LATIN_WORD_PATTERN = re.compile(r"[A-Za-z]{3,}")
+SLOT_TOKEN_PATTERN = re.compile(SLOT_LOOKAHEAD)
 GATE_MONSTER = "마물"
 EDEN = "에덴"
 ARK = "방주"
 WORLD_TERM_CORRECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (SAVIOR_SLOT, ("인간 남자", "인간 남성", "인간", "지구인", "인류", "용사", "왕자")),
+    (ARTIFICIAL_SPIRIT, ("인공지능",)),
     (
         SPIRIT_KIND,
         (
@@ -202,7 +215,13 @@ ROLE_TITLES: tuple[str, ...] = (
     "과장", "부장", "회장", "사장", "상사", "박사", "간호사", "점장", "함장",
     "교수", "주임", "팀장", "실장", "대리",
 )
-SLOT_SUFFIX_TITLES: tuple[str, ...] = ("훈", "공", "경")
+SLOT_SUFFIX_TITLES: tuple[str, ...] = (
+    "훈", "공", "경", "공주", "왕녀", "왕자", "여왕", "마왕", "용사",
+)
+ORDINAL_STEMS: frozenset[str] = frozenset(
+    {"첫", "둘", "셋", "넷", "다섯", "여섯", "일곱", "몇", "통"}
+)
+GENERAL_PEJORATIVE_PATTERN = re.compile(r"([가-힣]+)째(?=[!?.…,~♡♥\s]|$)")
 TITLE_HONORIFICS: tuple[str, ...] = ("님", "씨")
 BARE_NAME_SUFFIXES: frozenset[str] = frozenset({"씨", "군", "짱", "쨩", "님"})
 BARE_NAME_MIN_SUFFIXED_SHARE = 0.5
@@ -278,8 +297,8 @@ class SlotPatterns:
 
 def slot_patterns(names: SourceNames, foreign_addresses: Iterable[str] = ()) -> SlotPatterns:
     return SlotPatterns(
-        spirit=compile_names(names.character),
-        savior=compile_names((*names.user, *foreign_addresses)),
+        spirit=compile_terms(names.character, NAME_FOLLOWERS),
+        savior=compile_terms((*names.user, *foreign_addresses), NAME_FOLLOWERS),
     )
 
 
@@ -317,7 +336,7 @@ WORLD_TERM_PATTERNS: tuple[tuple[str, re.Pattern[str] | None], ...] = (
         for target, terms in WORLD_CONCEPT_CORRECTIONS
     ),
 )
-ROLE_ADDRESS_PATTERN = compile_names(ROLE_ADDRESSES)
+ROLE_ADDRESS_PATTERN = compile_terms(ROLE_ADDRESSES, NAME_FOLLOWERS)
 ROLE_TITLE_PATTERN = compile_terms(
     title + honorific for title in ROLE_TITLES for honorific in ("", *TITLE_HONORIFICS)
 )
@@ -332,12 +351,20 @@ PEJORATIVE_ARTIFACT_PATTERN = re.compile(
 )
 
 
+def _pejorative_replacement(match: re.Match[str]) -> str:
+    stem = match.group(1)
+    if stem in ORDINAL_STEMS:
+        return match.group(0)
+    return f"{stem} {PEJORATIVE_REPLACEMENT}"
+
+
 def correct_world_terms(conversation: SourceConversation) -> SourceConversation:
     turns = []
     for turn in conversation.turns:
         segments = []
         for segment in turn.segments:
             text = PEJORATIVE_ARTIFACT_PATTERN.sub(rf"\1 {PEJORATIVE_REPLACEMENT}", segment.text)
+            text = GENERAL_PEJORATIVE_PATTERN.sub(_pejorative_replacement, text)
             for target, pattern in WORLD_TERM_PATTERNS:
                 text = substitute_names(text, pattern, target)
             segments.append(TurnSegment(segment.kind, text))
@@ -349,8 +376,7 @@ def address_forms(text: str) -> list[tuple[str, str]]:
     return ADDRESS_FORM_PATTERN.findall(text)
 
 
-def canon_address_forms() -> frozenset[str]:
-    forms: set[str] = set()
+def canon_dialogue_lines() -> Iterator[str]:
     for slug in roster_slugs():
         for split in DATASET_SPLITS:
             path = sft_split_path(slug, split)
@@ -363,11 +389,19 @@ def canon_address_forms() -> frozenset[str]:
                         record.get("language") == CANON_LANGUAGE
                         and record.get("source_class") == SourceClass.CANON_DIALOGUE.value
                     ):
-                        forms.update(
-                            base + suffix
-                            for base, suffix in address_forms(record["completion"][0]["content"])
-                        )
-    return frozenset(forms)
+                        yield record["completion"][0]["content"]
+
+
+def canon_address_forms() -> frozenset[str]:
+    return frozenset(
+        base + suffix for line in canon_dialogue_lines() for base, suffix in address_forms(line)
+    )
+
+
+def canon_word_stems() -> frozenset[str]:
+    return frozenset(
+        word_stem(word) for line in canon_dialogue_lines() for word in WORD_PATTERN.findall(line)
+    )
 
 
 def foreign_address_forms(
@@ -430,10 +464,32 @@ def foreign_bare_names(
     return tuple(sorted(names, key=lambda name: (-len(name), name)))
 
 
+@dataclass(frozen=True)
+class RoleCorrection:
+    foreign: re.Pattern[str] | None
+    bare_names: re.Pattern[str] | None
+    surnames: re.Pattern[str] | None
+
+
+def role_correction(
+    foreign_addresses: Iterable[str] = (), bare_names: Iterable[str] = ()
+) -> RoleCorrection:
+    names = sorted(set(bare_names), key=lambda name: (-len(name), name))
+    return RoleCorrection(
+        foreign=compile_terms(foreign_addresses, NAME_FOLLOWERS),
+        bare_names=compile_terms(names),
+        surnames=(
+            re.compile(
+                f"(?<![가-힣])(?:{'|'.join(map(re.escape, names))})\\s+(?={SLOT_LOOKAHEAD})"
+            )
+            if names
+            else None
+        ),
+    )
+
+
 def correct_roles(
-    conversation: SourceConversation,
-    foreign: re.Pattern[str] | None,
-    bare_names: re.Pattern[str] | None,
+    conversation: SourceConversation, correction: RoleCorrection
 ) -> SourceConversation:
     turns = []
     for turn in conversation.turns:
@@ -441,10 +497,14 @@ def correct_roles(
         segments = []
         for segment in turn.segments:
             text = substitute_names(segment.text, ROLE_ADDRESS_PATTERN, counterpart)
-            text = substitute_names(text, foreign, counterpart)
-            text = substitute_names(text, bare_names, counterpart)
+            text = substitute_names(text, correction.foreign, counterpart)
+            if correction.surnames is not None:
+                text = correction.surnames.sub("", text)
+            text = substitute_names(text, correction.bare_names, counterpart)
             text = TITLE_AFTER_SLOT_PATTERN.sub(r"\1", text)
             text = substitute_names(text, ROLE_TITLE_PATTERN, counterpart)
+            text = DUPLICATE_SLOT_PATTERN.sub(r"\1", text)
+            text = SELF_NAMING_PATTERNS[turn.role].sub(rf"\1{SELF_REFERENCE_WORD}", text)
             segments.append(TurnSegment(segment.kind, text))
         turns.append(SourceTurn(turn.role, tuple(segments)))
     return replace(conversation, turns=tuple(turns))
@@ -453,7 +513,13 @@ def correct_roles(
 def is_common_turn(turn: SourceTurn, vocabulary: frozenset[str]) -> bool:
     contradiction = GENDER_CONTRADICTIONS[turn.role]
     for segment in turn.segments:
-        if KANA_PATTERN.search(segment.text) or contradiction.search(segment.text):
+        if (
+            KANA_PATTERN.search(segment.text)
+            or LATIN_WORD_PATTERN.search(SLOT_TOKEN_PATTERN.sub("", segment.text))
+            or contradiction.search(segment.text)
+            or mentions_real_world(segment.text)
+            or any(marker in segment.text for marker in SPIRIT_ONLY_MARKERS)
+        ):
             return False
         if {word_stem(word) for word in WORD_PATTERN.findall(segment.text)} & vocabulary:
             return False
@@ -495,8 +561,17 @@ def _pattern_runs(turns: list[SourceTurn], common: list[bool]) -> list[PatternRu
     return runs
 
 
+def scenario_decision(conversation: SourceConversation) -> TurnClassification:
+    setting = scenario_classification(conversation.setting)
+    if setting is not TurnClassification.ACCEPTED:
+        return setting
+    return dialogue_classification(
+        segment.text for turn in conversation.turns for segment in turn.segments
+    )
+
+
 def is_accepted_scenario(conversation: SourceConversation) -> bool:
-    return scenario_classification(conversation.setting) is TurnClassification.ACCEPTED
+    return scenario_decision(conversation) is TurnClassification.ACCEPTED
 
 
 def template_conversation(conversation: SourceConversation) -> SourceConversation | None:
@@ -611,11 +686,9 @@ def slotted_patterns(slotted: SourceConversation) -> list[DialoguePattern]:
 
 
 def corrected_conversation(
-    slotted: SourceConversation,
-    foreign: re.Pattern[str] | None,
-    bare_names: re.Pattern[str] | None,
+    slotted: SourceConversation, correction: RoleCorrection
 ) -> SourceConversation:
-    return correct_anatomy(correct_world_terms(correct_roles(slotted, foreign, bare_names)))
+    return correct_anatomy(correct_world_terms(correct_roles(slotted, correction)))
 
 
 def conversation_patterns(
@@ -630,11 +703,7 @@ def conversation_patterns(
     if aligned is None:
         return []
     return slotted_patterns(
-        corrected_conversation(
-            aligned,
-            compile_names(foreign_addresses),
-            compile_terms(bare_names),
-        )
+        corrected_conversation(aligned, role_correction(foreign_addresses, bare_names))
     )
 
 
@@ -644,10 +713,11 @@ def build_intimacy_patterns(path: Path = INTIMACY_PATTERNS_FILE) -> Counter[str]
     stats["source_conversations"] = len(conversations)
     slotted: list[SourceConversation] = []
     for conversation in conversations:
-        accepted = template_conversation(conversation)
-        if accepted is None:
+        policy = scenario_decision(conversation)
+        if policy is not TurnClassification.ACCEPTED:
+            stats[f"policy:{policy.value}"] += 1
             continue
-        aligned, decision = align_genders(slot_conversation(accepted))
+        aligned, decision = align_genders(slot_conversation(conversation))
         stats[decision] += 1
         if aligned is not None:
             slotted.append(aligned)
@@ -656,13 +726,12 @@ def build_intimacy_patterns(path: Path = INTIMACY_PATTERNS_FILE) -> Counter[str]
     stats["foreign_address_forms"] = len(foreign_addresses)
     bare_names = foreign_bare_names(slotted, canon_forms)
     stats["foreign_bare_names"] = len(bare_names)
-    foreign = compile_names(foreign_addresses)
-    bare = compile_terms(bare_names)
+    correction = role_correction(foreign_addresses, bare_names)
     staging = path.with_name(f"{path.name}{STAGING_SUFFIX}")
     path.parent.mkdir(parents=True, exist_ok=True)
     with staging.open("w", encoding="utf-8", newline="\n") as handle:
         for conversation in slotted:
-            patterns = slotted_patterns(corrected_conversation(conversation, foreign, bare))
+            patterns = slotted_patterns(corrected_conversation(conversation, correction))
             stats["pattern_conversations"] += bool(patterns)
             for pattern in patterns:
                 stats["patterns"] += 1

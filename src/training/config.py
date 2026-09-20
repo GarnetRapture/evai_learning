@@ -1,4 +1,4 @@
-"""Settings for joint training of the single fixed 230M model."""
+"""Settings for joint training of the single fixed backbone."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,7 +34,6 @@ class TrainingSettings:
     replay_ratio: float
     replay_floor: int
     general_corpus: bool
-    save_interval_seconds: int = 300
 
 
 @dataclass(frozen=True)
@@ -82,8 +81,6 @@ def load_training_config(config_path: Path | None = None) -> TrainingConfig:
         raise ConfigurationError("Token storage requires a positive CPU memory limit", path)
     if training.preparation_workers <= 0:
         raise ConfigurationError("CPU preparation requires a positive worker count", path)
-    if training.save_interval_seconds <= 0:
-        raise ConfigurationError("Latest-model save interval must be positive", path)
     if training.curriculum not in {
         "full", "dialogue_alignment", "knowledge_completion", "dialogue_extension",
         "dialogue_context",

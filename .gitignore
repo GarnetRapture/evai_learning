@@ -20,6 +20,7 @@ tmp_codex/
 /src/**/assets/
 /src/**/*.dll
 /build/
+backup/
 
 artifacts/
 configs/

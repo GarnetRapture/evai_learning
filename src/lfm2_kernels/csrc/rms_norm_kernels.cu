@@ -222,4 +222,9 @@ cudaError_t launch_rms_norm_backward(const RmsNormBackward& request, const Launc
     });
 }
 
+const char* describe_cuda_error(cudaError_t status)
+{
+    return cudaGetErrorString(status);
+}
+
 }

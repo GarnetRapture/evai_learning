@@ -24,40 +24,6 @@ struct MutableTensor3 {
     Shape3 strides;
 };
 
-struct ShortConvParameters {
-    const float* weight;
-    const float* bias;
-    std::int64_t taps;
-};
-
-struct ShortConvForward {
-    StorageType storage;
-    ConstTensor3 projection;
-    ShortConvParameters parameters;
-    ConstTensor3 state;
-    MutableTensor3 output;
-    std::int64_t chunk;
-};
-
-struct ShortConvBackward {
-    StorageType storage;
-    ConstTensor3 projection;
-    ShortConvParameters parameters;
-    ConstTensor3 grad_output;
-    MutableTensor3 grad_projection;
-    float* grad_weight_partial;
-    float* grad_bias_partial;
-    std::int64_t chunk;
-    std::int64_t chunks;
-};
-
-struct ShortConvStateUpdate {
-    StorageType storage;
-    ConstTensor3 projection;
-    MutableTensor3 state;
-    bool has_history;
-};
-
 struct LaunchContext {
     cudaStream_t stream;
     int multiprocessors;
@@ -65,7 +31,7 @@ struct LaunchContext {
 
 struct AdamWBuffers {
     void* weights;
-    const void* grads;
+    void* grads;
     void* exp_avg;
     void* exp_avg_sq;
     std::int64_t numel;
@@ -113,10 +79,43 @@ struct RmsNormBackward {
     std::int64_t partial_rows;
 };
 
-constexpr bool shortconv_supports_taps(std::int64_t taps)
+struct RopeApply {
+    StorageType storage;
+    const void* input;
+    const void* cos;
+    const void* sin;
+    void* output;
+    std::int64_t rows;
+    std::int64_t head_dim;
+    std::int64_t heads;
+    std::int64_t seq_len;
+    bool negate_sin;
+};
+
+constexpr bool rope_supports_head_dim(std::int64_t head_dim)
 {
-    return taps >= 2 && taps <= 4;
+    return head_dim == 64 || head_dim == 128 || head_dim == 256;
 }
+
+cudaError_t launch_rope_apply(const RopeApply& request, const LaunchContext& context);
+
+struct SwiGluForward {
+    StorageType storage;
+    const void* gate;
+    const void* up;
+    void* output;
+    std::int64_t numel;
+};
+
+struct SwiGluBackward {
+    StorageType storage;
+    const void* gate;
+    const void* up;
+    const void* grad_output;
+    void* grad_gate;
+    void* grad_up;
+    std::int64_t numel;
+};
 
 constexpr bool rms_norm_supports_columns(std::int64_t columns)
 {
@@ -130,16 +129,13 @@ cudaError_t launch_rms_norm_forward(const RmsNormForward& request, const LaunchC
 
 cudaError_t launch_rms_norm_backward(const RmsNormBackward& request, const LaunchContext& context);
 
-std::int64_t shortconv_chunk_tokens(
-    std::int64_t batch, std::int64_t seq_len, std::int64_t channels, int multiprocessors);
+cudaError_t launch_swiglu_forward(const SwiGluForward& request, const LaunchContext& context);
+
+cudaError_t launch_swiglu_backward(const SwiGluBackward& request, const LaunchContext& context);
+
+inline constexpr std::int64_t adamw_vector_width = 8;
 
 std::int64_t adamw_reduce_blocks(int multiprocessors);
-
-cudaError_t launch_shortconv_forward(const ShortConvForward& request, const LaunchContext& context);
-
-cudaError_t launch_shortconv_backward(const ShortConvBackward& request, const LaunchContext& context);
-
-cudaError_t launch_shortconv_state_update(const ShortConvStateUpdate& request, const LaunchContext& context);
 
 cudaError_t launch_sr_adamw(
     const AdamWBuffers& buffers, const AdamWSettings& settings, const LaunchContext& context);

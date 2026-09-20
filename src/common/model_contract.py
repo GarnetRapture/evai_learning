@@ -8,49 +8,34 @@ from common.errors import EvaiError
 from common.hashing import compute_file_sha256
 from common.model_storage import MODEL_MARKER, model_storage_lock, read_model_marker
 
-MODEL_ID = "LiquidAI/LFM2.5-230M-Base"
-MODEL_REVISION = "9d2be5519834990d30996f878b6771cccbd24f2c"
-WEIGHTS_SHA256 = "e91eb22c0aeae0bcbea8ade56f5cfe3cf91bca0c34e859adacae8f4445416fe6"
+MODEL_ID = "Qwen/Qwen3-0.6B"
+MODEL_REVISION = "c1899de289a04d12100db370d81485cdf75e47ca"
+WEIGHTS_SHA256 = "f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b"
 CONTEXT_LENGTH = 32768
 DATASET_VERSION = "2.1.0"
 TRAINING_LANGUAGES = {"ko": "kr", "en": "en", "zh_tw": "zh_tw"}
-MAX_MODEL_BYTES = 700_000_000
+MAX_MODEL_BYTES = 1_600_000_000
 TRAINING_CONTRACT_FILE = MODEL_MARKER
 BEHAVIOR_FIELDS = ("interpretation", "emotion", "intention", "decision", "action")
 
 
 def validate_model_config(config: dict[str, Any]) -> None:
     expected = {
-        "model_type": "lfm2",
+        "model_type": "qwen3",
         "hidden_size": 1024,
-        "num_hidden_layers": 14,
+        "num_hidden_layers": 28,
         "num_attention_heads": 16,
         "num_key_value_heads": 8,
-        "vocab_size": 65536,
+        "head_dim": 128,
+        "intermediate_size": 3072,
+        "vocab_size": 151936,
         "tie_word_embeddings": True,
-        "conv_L_cache": 3,
     }
     for key, value in expected.items():
         if config.get(key) != value:
             raise EvaiError(f"{MODEL_ID} requires {key}={value}, got {config.get(key)}")
-    layers = config.get("layer_types", [])
-    if layers != [
-        "conv",
-        "conv",
-        "full_attention",
-        "conv",
-        "full_attention",
-        "conv",
-        "full_attention",
-        "conv",
-        "full_attention",
-        "conv",
-        "full_attention",
-        "conv",
-        "full_attention",
-        "conv",
-    ]:
-        raise EvaiError("Backbone must retain the exact 8 LIV / 6 GQA layer order")
+    if config.get("max_position_embeddings", 0) < CONTEXT_LENGTH:
+        raise EvaiError(f"Backbone must reach the {CONTEXT_LENGTH} token training range")
 
 
 def _verify_weights(path: Path) -> str:

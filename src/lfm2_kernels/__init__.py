@@ -1,7 +1,7 @@
-"""CUDA operators for LFM2-style hybrid models, built with the installed CUDA toolkit.
+"""CUDA operators for the trained transformer backbone, built with the installed CUDA toolkit.
 
 ``csrc`` is compiled by nvcc through xmake into one operator library that registers
-``torch.ops.lfm2_kernels``. The core depends only on PyTorch; ``integration.lfm2``
+``torch.ops.lfm2_kernels``. The core depends only on PyTorch; ``integration.qwen3``
 additionally imports transformers.
 """
 
@@ -15,32 +15,28 @@ from lfm2_kernels.exceptions import (
 )
 from lfm2_kernels.extension import operators
 from lfm2_kernels.optimizer import StochasticRoundingAdamW
-from lfm2_kernels.reference import gated_short_conv_reference
 from lfm2_kernels.rms_norm import RmsNormFunction, rms_norm
-from lfm2_kernels.shortconv import (
-    GatedShortConvFunction,
-    gated_short_conv,
-    gated_short_conv_cached,
-)
+from lfm2_kernels.rope import RopeFunction, apply_rotary_pos_emb
+from lfm2_kernels.swiglu import SwiGluFunction, swiglu
 
 __version__ = "0.1.0"
 
 __all__ = [
     "DeviceProfile",
-    "GatedShortConvFunction",
     "Lfm2KernelsDeviceError",
     "Lfm2KernelsError",
     "Lfm2KernelsNonFiniteError",
     "Lfm2KernelsShapeError",
     "Lfm2KernelsUnsupportedError",
     "RmsNormFunction",
+    "RopeFunction",
     "StochasticRoundingAdamW",
+    "SwiGluFunction",
     "__version__",
+    "apply_rotary_pos_emb",
     "device_profile",
-    "gated_short_conv",
-    "gated_short_conv_cached",
-    "gated_short_conv_reference",
     "operators",
     "require_same_cuda_device",
     "rms_norm",
+    "swiglu",
 ]
